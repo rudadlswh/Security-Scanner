@@ -1,0 +1,24 @@
+// 실제 Spring HTTP/H2 검증용 샘플만 빌드한다. 하네스의 동결 출력과 분리한다.
+plugins { id 'java' }
+repositories { mavenCentral() }
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+dependencies {
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.4.0')
+    implementation 'org.springframework.boot:spring-boot-starter-web:3.4.0'
+    implementation 'com.h2database:h2:2.3.232'
+}
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+tasks.named('jar') { archiveFileName = 'fixture.jar' }
+tasks.register('prepareFixture', Copy) {
+    dependsOn 'jar'
+    from configurations.runtimeClasspath
+    into layout.buildDirectory.dir('runtime')
+    doLast {
+        def packages = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.collect {
+            [ecosystem: 'Maven', name: "${it.moduleVersion.id.group}:${it.moduleVersion.id.name}".toString(),
+             version: it.moduleVersion.id.version, scope: 'runtime']
+        }.unique { "${it.name}:${it.version}" }.sort { it.name }
+        def output = layout.buildDirectory.file('dependency-inventory.json').get().asFile
+        output.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson([packages: packages])) + '\n'
+    }
+}

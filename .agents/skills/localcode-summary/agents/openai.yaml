@@ -1,0 +1,4 @@
+interface:
+  display_name: "localcode-summary"
+  short_description: "완료된 합성 C 평가 네 건의 결과와 설명·인용 한계 조회"
+  default_prompt: "$localcode-summary로 완료된 합성 평가 결과를 요약해줘."

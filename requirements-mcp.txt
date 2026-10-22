@@ -1,0 +1,4 @@
+# 실제 설치 환경과 STDIO 통신을 검증한 공식 Python SDK 버전.
+mcp==1.26.0
+httpx==0.28.1
+pydantic==2.12.5

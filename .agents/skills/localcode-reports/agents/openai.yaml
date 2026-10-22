@@ -1,0 +1,4 @@
+interface:
+  display_name: "localcode-reports"
+  short_description: "저장된 예제 검사 보고서 목록과 지정한 실행의 결과 조회"
+  default_prompt: "$localcode-reports로 저장된 검사 보고서 목록을 보여줘."

@@ -1,0 +1,12 @@
+{
+  "collection_sha256": "REPLACE_WITH_COLLECTION_HASH",
+  "reviewer": "REPLACE_WITH_REVIEWER_AND_EXPOSURE_STATUS",
+  "areas": [
+    {"area": "SECURITY", "evidenceIds": ["E001"], "note": "실제 인증 경계의 파일/근거와 확인 방법으로 교체", "unresolvedLinks": ["UNREVIEWED"]},
+    {"area": "PRINCIPAL", "evidenceIds": ["E001"], "note": "현재 사용자 ID의 신뢰 근거로 교체", "unresolvedLinks": ["UNREVIEWED"]},
+    {"area": "CALL_CHAIN", "evidenceIds": ["E001"], "note": "호출 연결/분기 검토 결과로 교체", "unresolvedLinks": ["UNREVIEWED"]},
+    {"area": "MUTATION", "evidenceIds": ["E001"], "note": "변경 실행 위치/순서 확인 결과로 교체", "unresolvedLinks": ["UNREVIEWED"]},
+    {"area": "PERSISTENCE", "evidenceIds": ["E001"], "note": "저장소와 쿼리 조건 확인 결과로 교체", "unresolvedLinks": ["UNREVIEWED"]},
+    {"area": "RESTRICTIONS", "evidenceIds": ["E001"], "note": "추가 제한과 미해결 경계 검토 결과로 교체", "unresolvedLinks": ["UNREVIEWED"]}
+  ]
+}

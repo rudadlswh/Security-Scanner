@@ -1,0 +1,32 @@
+// 자체 검증 전용 고정 버전이다. 운영 버전 권고가 아니며 기존 동결 샘플과 별도로 빌드한다.
+plugins { id 'java' }
+repositories { mavenCentral() }
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+dependencies {
+    implementation platform('org.springframework.boot:spring-boot-dependencies:3.4.0')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    runtimeOnly 'com.h2database:h2'
+}
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.compilerArgs += ['-parameters'] }
+tasks.named('jar') { archiveFileName='fixture.jar' }
+tasks.register('prepareFixture', Copy) {
+    dependsOn 'jar'
+    from configurations.runtimeClasspath
+    into layout.buildDirectory.dir('runtime')
+    doLast {
+        def packages = configurations.runtimeClasspath.resolvedConfiguration.resolvedArtifacts.collect {
+            [ecosystem:'Maven', name:"${it.moduleVersion.id.group}:${it.moduleVersion.id.name}".toString(),version:it.moduleVersion.id.version,
+             scope:'runtime',runtime_path:'build/runtime/'+it.file.name,sha256:java.security.MessageDigest.getInstance('SHA-256').digest(it.file.bytes).encodeHex().toString()]
+        }.unique { "${it.name}:${it.version}" }.sort { it.name }
+        def artifact=tasks.named('jar').get().archiveFile.get().asFile
+        def hash=java.security.MessageDigest.getInstance('SHA-256').digest(artifact.bytes).encodeHex().toString()
+        def inputs=[:]
+        fileTree(projectDir) { include '**/*.java','**/build.gradle','**/settings.gradle','**/gradle.lockfile'; exclude 'build/**','.gradle/**' }.files.sort().each {
+            inputs[projectDir.toPath().relativize(it.toPath()).toString().replace('\\','/')]=java.security.MessageDigest.getInstance('SHA-256').digest(it.bytes).encodeHex().toString()
+        }
+        layout.buildDirectory.file('dependency-inventory.json').get().asFile.text=groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(
+            [format:'lcr-resolved-inventory/1',packages:packages,build:[artifact:'build/libs/fixture.jar',sha256:hash,configuration:'runtimeClasspath',resolved:true,runtime_directory:'build/runtime',inputs:inputs]]))+'\n'
+    }
+}

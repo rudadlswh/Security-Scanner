@@ -1,0 +1,25 @@
+{
+  "project_root": "C:/replace-with-your-java-project",
+  "http_target_ids": ["disposable-test-api"],
+  "disposable_server": {
+    "project_root": "C:/replace-with-your-java-project",
+    "authorized_disposable_environment": true,
+    "acknowledge_command_execution": true,
+    "command": [
+      "C:/Program Files/Java/jdk-17.0.18/bin/java.exe",
+      "-Dserver.address=127.0.0.1",
+      "-Dserver.port={port}",
+      "-Dspring.profiles.active=security-test",
+      "-jar",
+      "{project_copy}/target/disposable-test-app.jar"
+    ],
+    "base_url": "http://127.0.0.1:18081",
+    "health_path": "/actuator/health",
+    "health_statuses": [200],
+    "startup_timeout_seconds": 60,
+    "environment": {
+      "SPRING_DATASOURCE_URL": "jdbc:h2:mem:localcode-review;DB_CLOSE_DELAY=-1"
+    },
+    "environment_from": []
+  }
+}

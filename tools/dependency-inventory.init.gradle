@@ -1,0 +1,38 @@
+/* 기능: 명시 실행한 단일 Java/Gradle 빌드의 runtimeClasspath와 산출물·소스 해시를 내보낸다.
+ * 실행: 승인된 복사본 빌드에서 --init-script <이 파일> localcodeInventory.
+ * 주의: Gradle 실행 자체는 프로젝트 코드를 실행한다. 폴더 검사기가 자동 실행하지 않는다. */
+gradle.projectsEvaluated {
+    def project=gradle.rootProject
+    if (!project.subprojects.empty) throw new GradleException('LCR_INVENTORY_SINGLE_MODULE_REQUIRED')
+    def runtime=project.configurations.findByName('runtimeClasspath')
+    if (runtime==null) throw new GradleException('LCR_INVENTORY_JAVA_RUNTIME_REQUIRED')
+    def artifactTask=project.tasks.findByName('bootJar')
+    if (artifactTask==null || !artifactTask.enabled) artifactTask=project.tasks.findByName('jar')
+    if (artifactTask==null) throw new GradleException('LCR_INVENTORY_JAR_REQUIRED')
+    project.tasks.register('localcodeInventory') {
+        dependsOn artifactTask
+        doLast {
+            def sha={file -> java.security.MessageDigest.getInstance('SHA-256').digest(file.bytes).encodeHex().toString()}
+            def output=new File(project.buildDir,'localcode-runtime')
+            if (output.exists() && output.listFiles().length) throw new GradleException('LCR_INVENTORY_USE_EMPTY_RUNTIME_DIRECTORY')
+            output.mkdirs()
+            def paths=[] as Set
+            def packages=runtime.resolvedConfiguration.resolvedArtifacts.collect { artifact ->
+                def name=artifact.file.name
+                if (!paths.add(name)) throw new GradleException('LCR_INVENTORY_RUNTIME_FILENAME_COLLISION')
+                java.nio.file.Files.copy(artifact.file.toPath(),new File(output,name).toPath())
+                [ecosystem:'Maven',name:"${artifact.moduleVersion.id.group}:${artifact.moduleVersion.id.name}".toString(),version:artifact.moduleVersion.id.version,
+                 runtime_path:project.relativePath(new File(output,name)).replace('\\','/'),scope:'runtime',sha256:sha(artifact.file)]
+            }.sort { a,b -> (a.name+':'+a.version) <=> (b.name+':'+b.version) }
+            def inputs=[:]
+            project.fileTree(project.projectDir) {
+                include '**/*.java','**/*.kt','**/pom.xml','**/settings.gradle','**/settings.gradle.kts','**/build.gradle','**/build.gradle.kts','**/gradle.lockfile'
+                exclude '**/.*/**','build/**','target/**','out/**','logs/**','backup/**','backups/**','node_modules/**'
+            }.files.sort().each { inputs[project.relativePath(it).replace('\\','/')]=sha(it) }
+            def artifact=artifactTask.archiveFile.get().asFile
+            new File(project.buildDir,'localcode-dependencies.json').text=groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(
+                [format:'lcr-resolved-inventory/1',packages:packages,build:[artifact:project.relativePath(artifact).replace('\\','/'),sha256:sha(artifact),
+                 configuration:'runtimeClasspath',resolved:true,runtime_directory:project.relativePath(output).replace('\\','/'),inputs:inputs]]))+'\n'
+        }
+    }
+}

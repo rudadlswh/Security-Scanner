@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "non-owner-cannot-delete-fixture",
+      "setup": [
+        {"method": "POST", "path": "/test/fixtures/item", "actor": "observer", "expect_status": [201], "json": {"id": "lcr-disposable-001", "owner": "owner"}}
+      ],
+      "before": {"method": "GET", "path": "/test/fixtures/item/state", "actor": "observer", "expect_status": [200], "json_pointer": "/exists", "expected": true},
+      "request": {"method": "DELETE", "path": "/api/items/lcr-disposable-001", "actor": "non_owner", "expect_status": [403, 404]},
+      "after": {"method": "GET", "path": "/test/fixtures/item/state", "actor": "observer", "expect_status": [200], "json_pointer": "/exists", "expected": true},
+      "cleanup": [
+        {"method": "DELETE", "path": "/test/fixtures/item", "actor": "observer", "expect_status": [200, 204, 404]}
+      ],
+      "cleanup_verify": {"method": "GET", "path": "/test/fixtures/item/state", "actor": "observer", "expect_status": [200], "json_pointer": "/exists", "expected": false}
+    }
+  ]
+}

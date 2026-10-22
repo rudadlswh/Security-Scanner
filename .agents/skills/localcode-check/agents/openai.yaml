@@ -1,0 +1,4 @@
+interface:
+  display_name: "localcode-check"
+  short_description: "고정 Java 예제를 로컬에서 검사하고 결함 재현 결과 조회"
+  default_prompt: "$localcode-check로 예제 보안 검사를 실행해줘."

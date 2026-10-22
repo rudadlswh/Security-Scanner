@@ -1,0 +1,26 @@
+# Local configuration and confidential scan artifacts
+localcode-review.json
+localcode-review.json.backup-*
+*.local.json
+.env
+.env.*
+!.env.example
+results/
+archives/
+experiments/
+decisions/
+evaluation/
+AGENTS.md
+.codex/
+.idea/
+# Build, caches and virtual environments
+.gradle/
+build/
+target/
+out/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+.DS_Store

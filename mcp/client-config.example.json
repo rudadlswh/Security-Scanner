@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "localcode_review": {
+      "command": "python",
+      "args": ["-u", "C:/path/Security-Scanner/mcp_server.py", "--config", "C:/path/Security-Scanner/localcode-review.json"]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+// Product-only Java bridge. Historical experiment harnesses are not packaged.
+plugins { id 'java' }
+group = 'dev.localcodereview'
+version = '0.1.0'
+java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }
+repositories { mavenCentral() }
+dependencies { implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.1' }
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+wrapper { gradleVersion = '8.9'; distributionType = Wrapper.DistributionType.BIN }
+tasks.register('compileProduct', JavaCompile) {
+    source = files(
+        'src/product/java/dev/localcodereview/ProductBridge.java',
+        'src/product/java/dev/localcodereview/SecurityRules.java',
+        'src/main/java/dev/localcodereview/Json.java',
+        'src/main/java/dev/localcodereview/ScopeAudit.java',
+        'src/main/java/dev/localcodereview/PolicyRules.java',
+        'src/main/java/dev/localcodereview/PolicyComparison.java')
+    classpath = configurations.runtimeClasspath
+    destinationDirectory = layout.buildDirectory.dir('product/classes')
+    options.release = 17
+}
+tasks.register('prepareProductRuntime', Copy) {
+    dependsOn 'compileProduct'
+    from configurations.runtimeClasspath
+    into layout.buildDirectory.dir('product/lib')
+}

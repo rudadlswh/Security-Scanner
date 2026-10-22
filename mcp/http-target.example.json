@@ -1,0 +1,19 @@
+{
+  "base_url": "http://127.0.0.1:18080",
+  "authorized_disposable_environment": true,
+  "plan_file": "REPLACE_WITH_ABSOLUTE_PATH_TO_HTTP_PLAN",
+  "allowed_paths": [
+    "/test/fixtures/item",
+    "/test/fixtures/item/state",
+    "/api/items/lcr-disposable-001",
+    "/api/unsafe/items/lcr-disposable-001"
+  ],
+  "max_requests": 40,
+  "timeout_seconds": 120,
+  "actors": {
+    "owner": {"headers_env": {"Authorization": "LCR_FIXTURE_OWNER"}},
+    "non_owner": {"headers_env": {"Authorization": "LCR_FIXTURE_NON_OWNER"}},
+    "observer": {"headers_env": {"Authorization": "LCR_FIXTURE_OBSERVER"}},
+    "anonymous": {"headers_env": {}}
+  }
+}

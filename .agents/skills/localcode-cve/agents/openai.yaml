@@ -1,0 +1,4 @@
+interface:
+  display_name: "localcode-cve"
+  short_description: "예제 동작 검사와 Oracle 공지의 JDK 영향 버전 대조"
+  default_prompt: "$localcode-cve로 CVE 조회를 포함해 예제를 검사해줘."

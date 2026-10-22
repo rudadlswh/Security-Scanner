@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "jdk": "C:/Program Files/Java/jdk-17.0.18",
+  "projects": {},
+  "model": {
+    "base_url": "http://127.0.0.1:11434",
+    "name": "qwen3.5:9b",
+    "digest": "REPLACE_WITH_INSTALLED_FULL_DIGEST"
+  },
+  "allow_osv_network": false,
+  "http_targets": {},
+  "scan_profiles": {}
+}
