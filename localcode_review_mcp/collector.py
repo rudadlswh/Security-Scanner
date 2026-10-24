@@ -15,9 +15,18 @@ AREAS = ("SECURITY", "PRINCIPAL", "CALL_CHAIN", "MUTATION", "PERSISTENCE", "REST
 
 
 def bridge(config: ProductConfig, value: dict) -> dict:
+    from .provenance import execution_receipt
+    execution_receipt()
     classes = REPO / "build/product/classes"
     if not (classes / "dev/localcodereview/ProductBridge.class").is_file():
         raise ProductError("PRODUCT_RUNTIME_NOT_BUILT: run gradlew prepareProductRuntime")
+    receipt_path=REPO/'build/product/build-receipt.json'
+    if receipt_path.exists():
+        from .workspace import load_json, inside
+        receipt=load_json(receipt_path)
+        for relative,expected in {**receipt['inputs'],**receipt['outputs']}.items():
+            if digest(inside(REPO,relative).read_bytes())!=expected:
+                raise ProductError('PRODUCT_RUNTIME_BUILD_BINDING_MISMATCH')
     classpath = os.pathsep.join([str(classes), str(REPO / "build/product/lib/*")])
     try:
         result = subprocess.run([str(config.java()), "-Xmx384m", "-cp", classpath, "dev.localcodereview.ProductBridge"],
@@ -122,18 +131,68 @@ def _bare(value: str) -> str:
     return re.sub(r"<.*>|\[\]|\?", "", value).strip()
 
 
-def resolve_type(name: str, context: dict, classes: list[dict]) -> list[dict]:
+def declared_types(name: str, context: dict, classes: list[dict]) -> list[dict]:
     name = _bare(name)
-    possible = {name, context["package"] + "." + name}
+    possible = {name, (context["package"] + "." if context["package"] else "") + name}
     possible.update(x for x in context["imports"] if x.endswith("." + name))
     possible.update(x[:-1] + name for x in context["imports"] if x.endswith(".*"))
     direct = [c for c in classes if c["qualified_name"] in possible]
     if len(direct) != 1:
         return []
-    if direct[0]["kind"] != "INTERFACE":
+    return direct
+
+
+def ancestors(cls, classes, seen=None):
+    seen = set() if seen is None else set(seen)
+    if cls['qualified_name'] in seen:
+        return []
+    seen.add(cls['qualified_name'])
+    result = []
+    for parent in cls['parents']:
+        for target in declared_types(parent, cls, classes):
+            result.append(target)
+            result.extend(ancestors(target, classes, seen))
+    return result
+
+
+def resolve_type(name: str, context: dict, classes: list[dict]) -> list[dict]:
+    direct = declared_types(name, context, classes)
+    if len(direct) != 1 or direct[0]['kind'] != 'INTERFACE':
         return direct
-    implementations = [c for c in classes if c["kind"] == "CLASS" and any(_bare(p).rsplit(".", 1)[-1] == direct[0]["name"] for p in c["parents"])]
+    implementations = [c for c in classes if c['kind'] == 'CLASS' and
+                       any(p['qualified_name'] == direct[0]['qualified_name'] for p in ancestors(c, classes))]
     return implementations if len(implementations) == 1 else direct
+
+
+def method_targets(candidates, call, classes):
+    destinations = []
+    for cls in candidates:
+        levels, seen = [cls], set()
+        signatures = set()
+        while levels:
+            following = []
+            for owner in levels:
+                if owner['qualified_name'] in seen: continue
+                seen.add(owner['qualified_name'])
+                for member in owner['methods']:
+                    signature = (member['name'], tuple(member.get('parameter_types', member['parameters'].values())))
+                    if signature in signatures: continue
+                    if member['name'] == call['name'] and (call['arity'] == -1 or member['arity'] == call['arity']):
+                        destinations.append((owner, member))
+                        signatures.add(signature)
+                for parent in owner['parents']: following.extend(declared_types(parent, owner, classes))
+            levels = following
+    if len(destinations) > 1 and call.get('argument_types') is not None:
+        def qualified(t, owner):
+            if any(mark in t for mark in ('<','[','?')):return t
+            if t in {'String','Object','Boolean','Integer','Long'}:return 'java.lang.'+t
+            resolved = declared_types(t, owner, classes)
+            return resolved[0]['qualified_name'] if len(resolved)==1 else t
+        # Exact declared types only; unknown/boxing/varargs remain unresolved.
+        destinations = [(c,m) for c,m in destinations if '<UNKNOWN>' not in call['argument_types'] and
+            [qualified(t,c) for t in m.get('parameter_types',m['parameters'].values())] ==
+            [qualified(t,call.get('_context',c)) for t in call['argument_types']]]
+    return destinations
 
 
 def collect(config: ProductConfig, project_id: str, endpoint_id: str, *, prepared=None) -> dict:
@@ -169,16 +228,22 @@ def collect(config: ProductConfig, project_id: str, endpoint_id: str, *, prepare
                 candidates = resolve_type(variables[call["receiver"]], current, classes)
             else:
                 candidates = []
-            destinations = [(c, m) for c in candidates for m in c["methods"] if m["name"] == call["name"] and m["arity"] == call["arity"]]
+            destinations = method_targets(candidates, {**call,'_context':current}, classes)
             if len(destinations) == 1:
                 target, target_method = destinations[0]
-                edges.append({"from": eid, "line": call["line"], "target": target["qualified_name"] + "." + target_method["name"], "link_basis": "UNIQUE_DECLARED_TYPE_NAME_AND_ARITY"})
+                edges.append({"from": eid, "line": call["line"], "target": target["qualified_name"] + "." + target_method["name"],
+                              "target_path":target['path'],"target_line":target_method['start'],
+                              "execution_context":call.get('execution_context','LEXICAL_CALL'),
+                              "runtime_dispatch_proven":False,"link_basis": "UNIQUE_DECLARED_SIGNATURE_OR_INHERITED_CANDIDATE"})
                 pending.append((target, target_method, "DECLARED_CALL_TARGET"))
             else:
                 if len(unresolved) >= 5000:
                     raise ProductError("UNRESOLVED_CALL_LIMIT")
                 unresolved.append({"source_id": eid, "line": call["line"], "receiver": call["receiver"], "method": call["name"],
-                                   "reason": "EXTERNAL_OR_UNRESOLVED_CALL" if not destinations else "OVERLOADED_OR_AMBIGUOUS_CALL"})
+                                   "execution_context":call.get('execution_context','LEXICAL_CALL'),
+                                   "reason": "REFLECTION_DYNAMIC_TARGET" if call['name'] in {'forName','getMethod','getDeclaredMethod','invoke','newInstance'} else
+                                   "DEFERRED_TARGET_UNRESOLVED" if call.get('kind')=='METHOD_REFERENCE' else
+                                   "EXTERNAL_OR_UNRESOLVED_CALL" if not destinations else "OVERLOADED_OR_AMBIGUOUS_CALL"})
                 for candidate in candidates:
                     if candidate["kind"] == "INTERFACE":
                         pending.append((candidate, {"name": "<interface-declaration>", "start": candidate["start"], "end": candidate["end"],
@@ -202,7 +267,8 @@ def collect(config: ProductConfig, project_id: str, endpoint_id: str, *, prepare
               "unsupportedPaths": list(info["support_reasons"])}
     data = {"project_id": project_id, "endpoint": endpoint, "snapshot": info["snapshot"], "snapshot_sha256": info["snapshot_sha256"],
             "evidence": evidence, "edges": edges, "unresolved_calls": unresolved, "ledger": ledger,
-            "collection_method": "JDK_AST_WITH_LIMITED_DECLARATION_LINKS", "scope_status": "REQUIRES_REVIEW",
+            "collection_method": "JDK_AST_DECLARED_INHERITANCE_SIGNATURE_CALLBACK_CONTEXT", "scope_status": "REQUIRES_REVIEW",
+            "execution_completeness_proven":False,
             "support_reasons": info["support_reasons"]}
     snapshot.verify()
     store = ProductStore(config.results)

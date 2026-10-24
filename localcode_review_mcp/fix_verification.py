@@ -108,6 +108,13 @@ class FixVerifications:
         if patch.is_relative_to(root) or digest(patch.read_bytes()) != spec.get("bundle_sha256"):
             raise ProductError("FIX_BUNDLE_OPERATOR_HASH_REQUIRED_OUTSIDE_PROJECT")
         bundle = load_json(patch)
+        dependency_plan=spec.get('dependency_verification')
+        if dependency_plan:
+            if dependency_plan.get('contract')!='dependency-fix-plan/1':raise ProductError('DEPENDENCY_FIX_PLAN_INVALID')
+            for probe in dependency_plan.get('advisory_probes',[]):
+                advisory=Path(probe.get('advisory_file','')).resolve(strict=True)
+                if not advisory.is_file() or advisory.is_relative_to(root) or digest(advisory.read_bytes())!=probe.get('advisory_sha256'):
+                    raise ProductError('DEPENDENCY_ADVISORY_FILE_HASH_REQUIRED_OUTSIDE_PROJECT')
         commands = spec.get("build_commands", [])
         if not isinstance(commands, list) or not 1 <= len(commands) <= 5:
             raise ProductError("FIX_BUILD_COMMANDS_REQUIRED")
@@ -197,6 +204,10 @@ class FixVerifications:
                 return {"static_rules": sorted(f["rule_id"] for f in child["findings"] if f["kind"] == "STATIC_SECURITY_CANDIDATE"),
                         "dynamic_discrepancies": sum(f["kind"] == "DYNAMIC_BEHAVIOR_DISCREPANCY" for f in child["findings"])}
             report["before"] = counts(baseline)
+            dependency_plan = spec.get('dependency_verification')
+            if dependency_plan:
+                from .dependencies import dependency_inventory
+                before_dependencies = dependency_inventory(cfg,project)
             if report["before"] != spec.get("expected_before"):
                 raise ProductError("FIX_BASELINE_EXPECTATION_MISMATCH_NO_PATCH_APPLIED")
             copying = asyncio.create_task(asyncio.to_thread(copy_workspace, root, workspace))
@@ -229,6 +240,17 @@ class FixVerifications:
             report["after_report"] = str(fixed_cfg.results / after["report_id"] / "report.json")
             report["after"] = counts(after)
             report["verification"] = "MATCHES_FROZEN_CHECKS" if report["after"] == spec.get("expected_after") else "NEEDS_REVISION"
+            if dependency_plan:
+                from .dependency_verification import evaluate_dependency_fix
+                def http_reports(child, report_path):
+                    store=ProductStore(Path(report_path).parent.parent)
+                    return [store.read(row['report_id']) for row in child['checks']['dynamic']['targets']]
+                # Parent scan references live alongside the parent report, not the local copied baseline receipt.
+                before_path = (cfg.results / baseline['report_id'] / 'report.json') if baseline_report is not None else Path(report['before_report'])
+                verification=evaluate_dependency_fix(before_dependencies,dependency_inventory(fixed_cfg,project),dependency_plan,
+                    http_reports(baseline,before_path),http_reports(after,report['after_report']),report['builds'])
+                report['dependency_verification']=verification
+                if verification['status']!='MATCHES_REGISTERED_CHECKS':report['verification']='NEEDS_REVISION'
             report.update(state="COMPLETED", safety_guarantee=False,
                           limits=["Only the frozen static rules and configured HTTP cases were compared.",
                                   "Build commands have operator process privileges; this workflow is not an OS sandbox.",

@@ -64,10 +64,15 @@ class ContainerServer:
         if type(spec.get("startup_timeout_seconds", 60)) not in {int, float} or not 1 <= spec.get("startup_timeout_seconds", 60) <= 120:
             raise ProductError("CONTAINER_STARTUP_LIMIT_INVALID")
         self.created_network, self.started = False, False
+        self.container_attempted = False
+        self.network_policy = spec.get('network_policy', 'none')
+        if self.network_policy not in {'none', 'internal'}:
+            raise ProductError('CONTAINER_NETWORK_POLICY_INVALID')
         self.relay = None
         self.metadata = {"backend": "DOCKER_LINUX", "started": False, "stopped": False, "workspace_removed": False,
                          "os_security_sandbox": False, "isolation_verified": False, "command_sha256": digest(command),
-                         "restrictions": ["READ_ONLY_ROOT", "NON_ROOT", "ALL_CAPABILITIES_DROPPED", "NO_NEW_PRIVILEGES", "INTERNAL_NETWORK", "RESOURCE_LIMITS", "COPY_READ_ONLY_MOUNT", "RAW_CONTAINER_LOGS_DISABLED"]}
+                         "network_policy": self.network_policy,
+                         "restrictions": ["READ_ONLY_ROOT", "NON_ROOT", "ALL_CAPABILITIES_DROPPED", "NO_NEW_PRIVILEGES", "NETWORK_"+self.network_policy.upper(), "RESOURCE_LIMITS", "COPY_READ_ONLY_MOUNT", "RAW_CONTAINER_LOGS_DISABLED"]}
 
     def cli(self, *args):
         # 외부 Docker context/DOCKER_HOST/인증 환경을 상속하지 않고 로컬 엔진 주소를 고정한다.
@@ -102,23 +107,27 @@ class ContainerServer:
         except asyncio.CancelledError:
             await copying
             raise
-        self.created_network = True
-        await self.operation("network", "create", "--internal", self.network)
+        if self.network_policy == 'internal':
+            self.created_network = True
+            await self.operation("network", "create", "--internal", self.network)
         port = urlsplit(self.base).port
         internal_port = self.spec.get("container_port", 8080)
         argv = [x.replace("{project_copy}", "/workspace").replace("{port}", str(internal_port)) for x in self.spec["command"]]
         command = ["run", "--detach", "--name", self.name, "--pull=never", "--read-only", "--log-driver=none", "--no-healthcheck", "--user", self.spec.get("user", "10001:10001"),
                    "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit", str(self.spec.get("pids_limit", 128)),
                    "--memory", str(self.spec.get("memory_mib", 512)) + "m", "--memory-swap", str(self.spec.get("memory_mib", 512)) + "m", "--cpus", str(self.spec.get("cpus", 1)),
-                   "--network", self.network,
+                   "--network", self.network if self.network_policy == 'internal' else 'none',
+                   "--sysctl", "net.ipv6.conf.all.disable_ipv6=1", "--sysctl", "net.ipv6.conf.default.disable_ipv6=1",
                    "--mount", f"type=bind,src={self.copy},dst=/workspace,readonly", "--workdir", "/workspace",
                    "--tmpfs", "/tmp:rw,noexec,nosuid,size=134217728", "--entrypoint", argv[0], self.spec["image"], *argv[1:]]
+        self.container_attempted = True
         await self.operation(*command)
         self.started = True
         self.metadata["started"] = True
         state = json.loads(await asyncio.to_thread(self.cli, "inspect", self.name))[0]
         host, runtime = state["HostConfig"], state["Config"]
-        network = json.loads(await asyncio.to_thread(self.cli, "network", "inspect", self.network))[0]
+        network = json.loads(await asyncio.to_thread(self.cli, "network", "inspect", self.network))[0] if self.network_policy == 'internal' else {}
+        network_ok = (network.get('Internal') is True and host.get('NetworkMode') == self.network) if self.network_policy == 'internal' else host.get('NetworkMode') == 'none'
         bindings = host.get("PortBindings", {})
         binds = [mount for mount in state.get("Mounts", []) if mount.get("Type") == "bind"]
         mounts_ok = len(binds) == 1 and binds[0].get("Destination") == "/workspace" and binds[0].get("RW") is False and Path(binds[0].get("Source", "")).resolve() == self.copy.resolve()
@@ -128,7 +137,12 @@ class ContainerServer:
                 and host.get("PidsLimit") == self.spec.get("pids_limit", 128)
                 and host.get("NanoCpus") == int(self.spec.get("cpus", 1) * 1_000_000_000)
                 and runtime.get("User") == self.spec.get("user", "10001:10001") and "ALL" in host.get("CapDrop", [])
-                and "no-new-privileges" in host.get("SecurityOpt", []) and network.get("Internal") is True
+                and "no-new-privileges" in host.get("SecurityOpt", []) and network_ok
+                and host.get('Sysctls', {}).get('net.ipv6.conf.all.disable_ipv6') == '1'
+                and host.get('Sysctls', {}).get('net.ipv6.conf.default.disable_ipv6') == '1'
+                and not host.get('Devices') and not host.get('DeviceRequests') and not host.get('CapAdd')
+                and host.get('PidMode', '') != 'host' and host.get('IpcMode', '') != 'host'
+                and not any('unconfined' in option for option in host.get('SecurityOpt', []))
                 and not bindings and not any(state.get("NetworkSettings", {}).get("Ports", {}).values())):
             raise ProductError("CONTAINER_ISOLATION_INSPECTION_FAILED")
         self.metadata["isolation_verified"] = True
@@ -152,13 +166,16 @@ class ContainerServer:
         if self.relay is not None:
             await self.relay.stop()
         # run 실패도 컨테이너 생성 후 응답 유실일 수 있어 이름으로 제거를 시도한다.
-        if self.created_network:
+        if self.container_attempted:
             try:
                 await self.operation("rm", "--force", "--volumes", self.name)
             except ProductError:
                 names = await asyncio.to_thread(self.cli, "ps", "--all", "--filter", "name=^/" + self.name + "$", "--format", "{{.Names}}")
                 if names.strip():
                     raise ProductError("CONTAINER_CLEANUP_NOT_VERIFIED")
+            self.container_attempted = False
+            self.started = False
+        if self.created_network:
             try:
                 await self.operation("network", "rm", self.network)
             except ProductError:

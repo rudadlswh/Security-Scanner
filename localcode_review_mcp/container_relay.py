@@ -18,6 +18,9 @@ w=$!
 trap 'kill "$r" "$w" 2>/dev/null; wait "$r" "$w" 2>/dev/null' EXIT
 wait -n "$r" "$w"
 '''
+MAX_CONNECTIONS = 16
+BYTE_LIMIT = 16_777_216
+CONNECTION_SECONDS = 300
 
 
 class ContainerRelay:
@@ -28,6 +31,10 @@ class ContainerRelay:
         self.closing=False
         self.metadata={'transport':'DOCKER_EXEC_STDIN_STDOUT','listener':'127.0.0.1',
                        'container_destination':'127.0.0.1','max_connections':16,'bytes_per_direction_limit':16_777_216,
+                       'connection_timeout_seconds':CONNECTION_SECONDS,
+                       'accepted_connections':0,'refused_connections':0,'peak_connections':0,
+                       'byte_limit_closures':0,'timeout_closures':0,'transport_errors':0,
+                       'forwarded_bytes':{'request':0,'response':0},
                        'raw_logs_saved':False,'stopped':False}
 
     async def start(self):
@@ -44,10 +51,15 @@ class ContainerRelay:
         return self.metadata
 
     async def handle(self, reader, writer):
-        if self.closing or len(self.handlers)>=16:
+        if self.closing or len(self.handlers)>=MAX_CONNECTIONS:
+            self.metadata['refused_connections']+=1
             writer.close()
+            try:await writer.wait_closed()
+            except (OSError,ConnectionError):pass
             return
         task=asyncio.current_task();self.handlers.add(task)
+        self.metadata['accepted_connections']+=1
+        self.metadata['peak_connections']=max(self.metadata['peak_connections'],len(self.handlers))
         process=None;forwarders=[]
         try:
             endpoint='npipe:////./pipe/docker_engine' if os.name=='nt' else 'unix:///var/run/docker.sock'
@@ -60,18 +72,25 @@ class ContainerRelay:
             except asyncio.CancelledError:
                 process=await launching
                 raise
-            async def forward(source,destination):
+            async def forward(source,destination,direction):
                 total=0
                 while chunk:=await source.read(16_384):
-                    total+=len(chunk)
-                    if total>16_777_216:raise ProductError('CONTAINER_RELAY_BYTE_LIMIT')
-                    destination.write(chunk);await destination.drain()
-            forwarders=[asyncio.create_task(forward(reader,process.stdin)),asyncio.create_task(forward(process.stdout,writer))]
-            async with asyncio.timeout(300):
+                    allowed=chunk[:max(0,BYTE_LIMIT-total)]
+                    if allowed:
+                        destination.write(allowed);await destination.drain()
+                        total+=len(allowed)
+                        self.metadata['forwarded_bytes'][direction]+=len(allowed)
+                    if len(allowed)!=len(chunk):raise ProductError('CONTAINER_RELAY_BYTE_LIMIT')
+            forwarders=[asyncio.create_task(forward(reader,process.stdin,'request')),asyncio.create_task(forward(process.stdout,writer,'response'))]
+            async with asyncio.timeout(CONNECTION_SECONDS):
                 done,_=await asyncio.wait(forwarders,return_when=asyncio.FIRST_COMPLETED)
                 for finished in done:finished.result()
-        except (OSError,ProductError,ConnectionError,TimeoutError):
-            pass  # HTTP 호출자는 연결 오류를 받는다. 원문/자격증명을 로그에 쓰지 않는다.
+        except TimeoutError:
+            self.metadata['timeout_closures']+=1
+        except ProductError:
+            self.metadata['byte_limit_closures']+=1
+        except (OSError,ConnectionError):
+            self.metadata['transport_errors']+=1
         finally:
             for pending in forwarders:pending.cancel()
             if forwarders:await asyncio.gather(*forwarders,return_exceptions=True)

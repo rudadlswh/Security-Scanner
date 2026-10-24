@@ -16,6 +16,10 @@ from .reviews import ReviewJobs, acknowledge_failure, authorize_model, authorize
 from .project_scan import ProjectScans, acknowledge_scan
 from .fix_verification import FixVerifications
 from .workspace import ProductConfig, ProductError, ProductStore, REPO, load_json, save_json
+from .assurance import freeze_benchmark, run_benchmark, validate_source_proposal, record_review
+from .audit import record_audit_review
+from .audit_verifier import authorize_verifier, verify_candidates, acknowledge_verifier
+from .reviews import SourceReviewJobs
 
 
 def main():
@@ -30,6 +34,24 @@ def main():
     configure.add_argument("--model")
     configure.add_argument("--digest")
     commands.add_parser("doctor", help="설정과 빌드 산출물 진단; 네트워크 요청 없음")
+    freeze = commands.add_parser('freeze-benchmark', help='새 평가 계획·기대값·소스 해시 사전 고정')
+    freeze.add_argument('--plan',type=Path,required=True);freeze.add_argument('--output',type=Path,required=True)
+    bench = commands.add_parser('benchmark', help='고정한 외부/자체 사례의 수집·검색 기준선 측정; 생성 없음')
+    bench.add_argument('--frozen',type=Path,required=True)
+    proposal = commands.add_parser('validate-source-proposal', help='저장된 AI 소스 원인 가설의 근거 연결 검증; 의미 승인이 아님')
+    proposal.add_argument('collection_id');proposal.add_argument('--proposal',type=Path,required=True)
+    analyze = commands.add_parser('analyze-source',help='명시 로컬 승인·진단 저장·예산으로 소스 원인 가설 1회; 자동 적용 없음')
+    analyze.add_argument('project_id');analyze.add_argument('collection_id')
+    review = commands.add_parser('record-independent-review', help='독립 검토자의 로컬 선언·해시·사례별 판정 저장')
+    review.add_argument('report_id');review.add_argument('--review',type=Path,required=True)
+    audit = commands.add_parser('record-audit-review', help='소스·검토 해시에 묶인 범위/후보 판정 로컬 선언 저장; 원래 보고서 불변')
+    audit.add_argument('report_id');audit.add_argument('--review',type=Path,required=True)
+    verifier_grant = commands.add_parser('authorize-audit-verifier', help='특정 검사 보고서의 검증 전용 신규 승인; 기존 예산 불변')
+    verifier_grant.add_argument('report_id');verifier_grant.add_argument('--calls',type=int,required=True);verifier_grant.add_argument('--minutes',type=int,required=True)
+    verifier = commands.add_parser('verify-audit-candidates', help='별도 모델과 전용 승인으로 소스 후보 검토; 자동 확정 없음')
+    verifier.add_argument('report_id');verifier.add_argument('grant_id')
+    verifier_ack = commands.add_parser('acknowledge-audit-failure', help='원격 유휴 확인 후 검증 잠금 해제; 호출 환급 없음')
+    verifier_ack.add_argument('grant_id');verifier_ack.add_argument('--remote-idle-confirmed',action='store_true',required=True)
     fix = commands.add_parser("verify-fix", help="승인된 프로필의 복사본 수정·빌드·전후 검사; 원본 변경 없음")
     fix.add_argument("project_path")
     scan = commands.add_parser("scan", help="폴더 하나의 승인된 검사와 통합 보고서 실행; 완료까지 대기")
@@ -115,6 +137,28 @@ def main():
                           "results_directory": str(cfg.results), "network_calls": 0, "model_calls": 0}
             elif args.command == "inspect":
                 result = inventory(cfg, args.project_id)[2]
+            elif args.command == 'freeze-benchmark':
+                result = freeze_benchmark(cfg,load_json(args.plan),args.output)
+            elif args.command == 'benchmark':
+                result = run_benchmark(cfg,load_json(args.frozen))
+            elif args.command == 'validate-source-proposal':
+                result = validate_source_proposal(cfg,args.collection_id,load_json(args.proposal))
+            elif args.command == 'analyze-source':
+                async def analyze_source():
+                    jobs=SourceReviewJobs(cfg);started=await jobs.start(args.project_id,args.collection_id)
+                    await jobs.tasks[started['job_id']]
+                    return jobs.status(started['job_id'])
+                result=asyncio.run(analyze_source())
+            elif args.command == 'record-independent-review':
+                result = record_review(cfg,args.report_id,load_json(args.review))
+            elif args.command == 'record-audit-review':
+                result = record_audit_review(cfg,args.report_id,load_json(args.review))
+            elif args.command == 'authorize-audit-verifier':
+                result = authorize_verifier(cfg,args.report_id,args.calls,args.minutes)
+            elif args.command == 'verify-audit-candidates':
+                result = asyncio.run(verify_candidates(cfg,args.report_id,args.grant_id))
+            elif args.command == 'acknowledge-audit-failure':
+                result = acknowledge_verifier(cfg,args.grant_id,args.remote_idle_confirmed)
             elif args.command == "scan":
                 async def scan_folder():
                     jobs = ProjectScans(cfg)

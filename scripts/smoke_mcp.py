@@ -19,7 +19,7 @@ TOOLS = {"get_capabilities", "run_sample_security_check", "list_security_reports
          "get_product_capabilities", "list_projects", "inspect_project", "collect_endpoint_evidence", "review_endpoint",
          "get_review_status", "cancel_review", "read_review_report", "list_product_reports", "inspect_dependencies",
          "scan_dependency_cves", "run_http_security_check", "scan_project", "get_project_scan_status",
-         "read_project_scan_report", "cancel_project_scan", "verify_project_fix", "get_fix_verification_status", "cancel_fix_verification"}
+         "read_project_scan_report", "cancel_project_scan", "verify_project_fix", "get_fix_verification_status", "cancel_fix_verification", "verify_audit_candidates", "get_audit_verification_status", "cancel_audit_verification"}
 
 
 async def smoke(target: Path, jdk: Path, runtime_cves: bool) -> dict:

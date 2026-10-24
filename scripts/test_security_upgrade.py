@@ -123,6 +123,7 @@ class UpgradeTest(unittest.TestCase):
         spec = {"project_root": str(self.source), "authorized_disposable_environment": True, "acknowledge_command_execution": True,
                 "docker_executable": sys.executable, "base_url": "http://127.0.0.1:18880", "command": ["/usr/bin/java", "-jar", "{project_copy}/app.jar"],
                 "image": "local/image@sha256:" + "a" * 64}
+        spec['network_policy']='internal'
         server = ContainerServer(spec, self.source, folder, [{"base_url": spec["base_url"], "authorized_disposable_environment": True}])
         calls = []
         def engine(*args):
@@ -132,7 +133,8 @@ class UpgradeTest(unittest.TestCase):
             if args[0] == "inspect":
                 return json.dumps([{"HostConfig": {"ReadonlyRootfs": True, "Privileged": False, "Memory": 512*1_048_576,
                     "MemorySwap": 512*1_048_576, "PidsLimit": 128, "NanoCpus": 1_000_000_000, "CapDrop": ["ALL"], "LogConfig": {"Type": "none"},
-                    "SecurityOpt": ["no-new-privileges"], "PortBindings": {}},
+                    "SecurityOpt": ["no-new-privileges"], "PortBindings": {}, "NetworkMode":server.network,
+                    "Sysctls":{'net.ipv6.conf.all.disable_ipv6':'1','net.ipv6.conf.default.disable_ipv6':'1'}},
                     "Config": {"User": "10001:10001"}, "Mounts": [{"Type": "bind", "Destination": "/workspace", "RW": False, "Source": str(server.copy)}]}])
             if args[:2] == ("network", "inspect"):
                 return '[{"Internal":true}]'

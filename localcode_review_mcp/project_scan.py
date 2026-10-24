@@ -13,6 +13,8 @@ from pathlib import Path
 import shutil
 
 from .collector import collect, inventory
+from .audit import project_ledger
+from .audit_surface import surface_inventory
 from .source_security import scan_source_security
 from .dependencies import scan_cves
 from .disposable import DisposableServer
@@ -115,6 +117,7 @@ def markdown(report: dict) -> str:
         return text
     lines = ["# LocalCode Review 통합 검사 보고서", "", f"작업 ID: {cell(report['report_id'])}",
              f"실행 상태: {cell(report['execution_state'])} · 검사 범위: {cell(report['coverage_status'])}",
+             f"감사 원장: {cell(report.get('audit', {}).get('state', 'LEGACY_NOT_RECORDED'))} · 실행 완료는 후보 검증 완료가 아닙니다.",
              "", "이 보고서는 코드의 안전을 보증하지 않는다. 미지원·미실행·의미 미검토를 별도로 읽어야 한다.",
              "", "| 검사 단계 | 상태 | 사유/범위 |", "| --- | --- | --- |"]
     for name, stage in report["checks"].items():
@@ -307,6 +310,10 @@ class ProjectScans:
                       "project_id": project_id, "project_path": str(root), "profile_id": profile_id, "started_at": now(),
                       "checks": {name: {"status": "PENDING"} for name in ("source", "sast", "ai", "cve", "dynamic", "remediation", "fix")},
                       "endpoints": [], "findings": [], "errors": [], "model_calls_sent": 0,
+                      "authors": config.projects[project_id].get("proposal_authors", []),
+                      "audit_contract_version": "audit-ledger/2",
+                      "review_policy_sha256": digest(config.audit_policy.get('trusted_reviewers', {})),
+                      "discovery_model_digest": config.model.get('digest'),
                       "limits": {"max_endpoints": max_endpoints, "max_ai_endpoints": max_ai_endpoints,
                                  "include_remediation": include_remediation, "remediation_max_findings": 20},
                       "security_verdict": "NOT_ASSESSED", "limitations": [
@@ -326,6 +333,7 @@ class ProjectScans:
             raise
 
     def _save(self, report):
+        report['audit'] = project_ledger(report)
         folder = self.store.folder(report["report_id"])
         save_json(folder / "report.json", report, replace=True)
         path = folder / "report.md"
@@ -387,6 +395,7 @@ class ProjectScans:
                 snapshot, _, info = prepared
                 report["source_snapshot_sha256"] = info["snapshot_sha256"]
                 report["source_identity"] = info["snapshot"]["identity"]
+                report['surface_inventory'] = surface_inventory(snapshot, info)
                 stage = {"status": "PARTIAL" if info["support_reasons"] else "COMPLETED", "coverage": info["support"],
                          "reasons": info["support_reasons"], "excluded_sources": info["snapshot"]["excluded"],
                          "endpoint_count": len(info["endpoints"]), "endpoints_collected": 0,

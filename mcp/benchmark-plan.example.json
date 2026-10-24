@@ -1,0 +1,6 @@
+{
+  "contract": "benchmark-plan/1",
+  "authors": ["REPLACE_WITH_PLAN_AUTHOR"],
+  "previously_exposed": true,
+  "cases": [{"id": "case-1", "project_id": "REGISTERED_PROJECT", "endpoint": {"http_method": "DELETE", "http_path": "/items/{id}"}, "expected_symbols": ["example.ItemController.delete", "example.ItemService.delete"]}]
+}
