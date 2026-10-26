@@ -37,7 +37,7 @@ async def smoke():
                 listing=await session.list_tools();prompts=await session.list_prompts()
                 assert {t.name for t in listing.tools}==TOOLS
                 cap=payload(await session.call_tool('get_product_capabilities',{}))
-                assert cap['implementation']=='product-workflow/6'
+                assert cap['implementation']=='product-workflow/7'
                 assert cap['remediation_contract']=='security-remediation/17'
                 assert cap['audit_contract'].startswith('audit-ledger/2;')
                 assert 'record-audit-review' in cap['assurance_cli']

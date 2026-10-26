@@ -65,6 +65,12 @@ def verify_resolved_build(root: Path, data: dict, snapshot: Snapshot) -> dict:
 def dependency_inventory(config: ProductConfig, project_id: str) -> dict:
     root, settings = config.project(project_id)
     snapshot = Snapshot.read(root, settings.get("commit"))
+    if not any(p.endswith('.java') for p in snapshot.files):
+        from .python_source import PythonSnapshot
+        python_snapshot = PythonSnapshot.read(root, settings.get('commit'))
+        if any(p.endswith('.py') for p in python_snapshot.files):
+            from .python_dependencies import inventory as python_inventory
+            return python_inventory(config, project_id, python_snapshot)
     packages, unresolved, sources = {}, [], []
 
     def add(name, version, source, basis, scope="UNKNOWN"):

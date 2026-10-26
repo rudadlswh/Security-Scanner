@@ -100,6 +100,11 @@ def inventory(config: ProductConfig, project_id: str) -> tuple[Snapshot, dict, d
     root, project = config.project(project_id)
     snapshot = Snapshot.read(root, project.get("commit"))
     java_files = [name for name in snapshot.files if name.endswith(".java")]
+    if not java_files:
+        from .python_source import inventory as python_inventory
+        python_prepared = python_inventory(config, project_id)
+        if any(name.endswith('.py') for name in python_prepared[0].files):
+            return python_prepared
     ast = bridge(config, {"operation": "parse", "root": str(root), "files": java_files}) if java_files else {"classes": [], "errors": []}
     snapshot.verify()
     reasons = []
@@ -171,6 +176,7 @@ def method_targets(candidates, call, classes):
         signatures = set()
         while levels:
             following = []
+            level_signatures = set()
             for owner in levels:
                 if owner['qualified_name'] in seen: continue
                 seen.add(owner['qualified_name'])
@@ -179,8 +185,11 @@ def method_targets(candidates, call, classes):
                     if signature in signatures: continue
                     if member['name'] == call['name'] and (call['arity'] == -1 or member['arity'] == call['arity']):
                         destinations.append((owner, member))
-                        signatures.add(signature)
+                        level_signatures.add(signature)
                 for parent in owner['parents']: following.extend(declared_types(parent, owner, classes))
+            # Nearer declarations shadow ancestors, while sibling declarations
+            # at the same depth remain ambiguous regardless of parent order.
+            signatures.update(level_signatures)
             levels = following
     if len(destinations) > 1 and call.get('argument_types') is not None:
         def qualified(t, owner):
@@ -198,6 +207,9 @@ def method_targets(candidates, call, classes):
 def collect(config: ProductConfig, project_id: str, endpoint_id: str, *, prepared=None) -> dict:
     # 통합 검사는 한 번 파싱한 스냅샷을 공유한다. 기존 단건 호출과 해시 검증은 유지한다.
     snapshot, ast, info = inventory(config, project_id) if prepared is None else prepared
+    if info.get('source_language') == 'Python':
+        from .python_source import collect as python_collect
+        return python_collect(config, project_id, endpoint_id, (snapshot, ast, info))
     if info["project_id"] != project_id:
         raise ProductError("PREPARED_PROJECT_MISMATCH")
     selected = [e for e in info["endpoints"] if e["endpoint_id"] == endpoint_id]
@@ -281,6 +293,8 @@ def collect(config: ProductConfig, project_id: str, endpoint_id: str, *, prepare
 
 
 def evidence_text(snapshot: Snapshot, collection: dict) -> list[dict]:
+    if collection.get('raw_source_allowed_for_ai') is False:
+        raise ProductError('PYTHON_RAW_SOURCE_AI_NOT_SUPPORTED')
     result = []
     for evidence in collection["evidence"]:
         lines = snapshot.files[evidence["path"]].decode("utf-8-sig").splitlines()

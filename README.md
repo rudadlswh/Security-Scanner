@@ -1,6 +1,6 @@
 # LocalCode Review
 
-Java/Spring 프로젝트를 읽기 전용으로 조사하고 AST 보안 후보·승인된 로컬 AI 관찰·의존성 공지·등록 HTTP 검사·복사본 수정 검증을 연결한다. 현재 개발 버전은 **product-workflow/6**, 기본 HTTP 점검 영역 계약은 **security-remediation/17**, MCP는 **27개 도구/4개 프롬프트**다.
+Java/Spring 및 Python http.server 지원 구간을 읽기 전용으로 조사하고 AST 보안 후보·승인된 로컬 AI 관찰·의존성 공지·등록 HTTP 검사·복사본 수정 검증을 연결한다. 현재 개발 버전은 **product-workflow/7**, 기본 HTTP 점검 영역 계약은 **security-remediation/17**, MCP는 **27개 도구/4개 프롬프트**다.
 
 현재 기능과 게시용 검증 범위는 [검증 안내](docs/verification.md)를 따른다. 전체 보안·독립 검토·모든 프로젝트 정확성을 보증하지 않는다.
 
@@ -16,7 +16,7 @@ Java/Spring 프로젝트를 읽기 전용으로 조사하고 AST 보안 후보·
 - 새 감사 검토는 등록 Ed25519 키 서명을 요구한다. 선택형 `verify_audit_candidates`는 별도 모델·새 검증 전용 승인만 사용하며 자동 확정하지 않는다.
 - 기존 `/` 명령 `localcode-check`, `localcode-cve`, `localcode-reports`, `localcode-summary`는 고정 예제/과거 결과용이다.
 
-[폴더 검사](docs/folder-scan.md) · [새 평가·소스 분석·CVE 수정 검증](docs/assurance-workflows.md) · [MCP 연결](mcp/README.md)
+[폴더 검사](docs/folder-scan.md) · [새 평가·소스 분석·CVE 수정 검증](docs/assurance-workflows.md) · [MCP 연결](mcp/README.md) · [Python 검사](docs/python-analysis.md)
 
 ## MCP 도구 목록
 
@@ -70,7 +70,7 @@ Java/Spring 프로젝트를 읽기 전용으로 조사하고 AST 보안 후보·
 JDK17·Python3.12·requirements-mcp.txt 환경이 필요하다. 설치/네트워크 변경은 작업별로 정한다. 제품 브리지는 과거 동결 JAR와 분리한다.
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Java\jdk-17.0.18'
+$env:JAVA_HOME = Read-Host 'JDK 17 설치 폴더'
 # 기존 제품 라이브러리가 준비된 환경의 오프라인 빌드 및 입력/산출물 해시 영수증
 python scripts/build_product_runtime.py --jdk $env:JAVA_HOME
 python -m unittest discover -s scripts -p 'test_*.py' -v
@@ -88,3 +88,9 @@ python scripts/smoke_mcp_adoption.py
 실행마다 코드/런타임 해시·PID·UTC 영수증을 저장한다. 실행 중 제품 코드 변경을 감지한 서버는 새 작업을 거부하고 재시작을 요구한다. 재연결 후 `get_product_capabilities`의 `runtime_provenance`에서 코드 해시 일치와 `restart_required=false`를 확인한다. 자동 hot reload는 제공하지 않는다.
 
 실제 검사 대상 소스·진단 원문·승인·실행 결과는 로컬에 보존하고 공개 커밋에 포함하지 않는다. 이 저장소에는 제품 코드·합성 테스트·사용법을 포함한다. 개발 환경의 과거 실험 기록과 로컬 설정은 게시하지 않는다.
+
+## Python 지원
+
+`scan_project`는 표준 라이브러리 http.server의 리터럴 dispatch 경로와 제한된 SQL/HTML/객체 조회/파일 읽기 후보를 수집한다. 운영자가 지정한 고정 Bandit, PyPI 조회, 일회용 HTTP/브라우저, 대표 의존성 전후 계획을 같은 보고서에 연결할 수 있다. Python 원문은 기존 Java AI 계약으로 보내지 않는다.
+
+Bandit과 자체 AST가 같은 결함을 중복 탐지할 수 있다. 실행 완료·등록된 기대 동작 일치를 전체 안전이나 배포 호환성으로 해석하지 않는다. 선택 도구 설치와 프로필은 [Python 안내](docs/python-analysis.md), 게시본에서 확인한 범위는 [검증 기록](docs/verification.md)을 따른다.

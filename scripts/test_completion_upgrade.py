@@ -75,6 +75,15 @@ class CompletionTest(unittest.TestCase):
         data=inventory(self.config,'demo');c=collect(self.config,'demo',data[2]['endpoints'][0]['endpoint_id'],prepared=data)
         self.assertNotIn('b.Wrong.work',{e['symbol'] for e in c['evidence']})
 
+    def test_sibling_inherited_declarations_remain_ambiguous(self):
+        self.files({'Api.java':'''package demo; import org.springframework.web.bind.annotation.*;
+          interface Left { void work(); } interface Right { void work(); }
+          interface Both extends Left, Right {}
+          @RestController class Api {Both service; @GetMapping("/x") void get(){service.work();}}'''})
+        data=inventory(self.config,'demo');c=collect(self.config,'demo',data[2]['endpoints'][0]['endpoint_id'],prepared=data)
+        self.assertEqual([],c['edges'])
+        self.assertTrue(any(x['reason']=='OVERLOADED_OR_AMBIGUOUS_CALL' for x in c['unresolved_calls']))
+
     def test_frozen_benchmark_detects_edit_and_tracks_missing_expected_symbol(self):
         self.fixture()
         plan={'contract':'benchmark-plan/1','authors':['builder'],'previously_exposed':False,

@@ -176,6 +176,8 @@ class ReviewJobs:
         if policy not in {"owner_only", "owner_or_admin", "authenticated_anyone", "NOT_PROVIDED"}:
             raise ProductError("POLICY_UNSUPPORTED")
         collection = self.store.read(collection_id)
+        if collection.get('raw_source_allowed_for_ai') is False:
+            raise ProductError('PYTHON_RAW_SOURCE_AI_NOT_SUPPORTED')
         if collection.get("project_id") != project_id or collection.get("collection_id") != collection_id:
             raise ProductError("COLLECTION_PROJECT_MISMATCH")
         checksum = collection["collection_sha256"]

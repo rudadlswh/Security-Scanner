@@ -1,0 +1,4 @@
+# Optional Python analysis and browser tooling; install in a separate environment.
+bandit==1.9.4
+pip-audit==2.10.1
+playwright==1.64.1

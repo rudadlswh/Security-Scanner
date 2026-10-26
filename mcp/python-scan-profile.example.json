@@ -1,0 +1,11 @@
+{
+  "project_root": "C:/PATH/TO/PYTHON_PROJECT",
+  "python_analysis": {
+    "bandit_python": "C:/PATH/TO/TOOLS/Scripts/python.exe",
+    "bandit_version": "1.9.4",
+    "pip_audit_python": "C:/PATH/TO/TOOLS/Scripts/python.exe",
+    "pip_audit_version": "2.10.1",
+    "allow_pypi_network": false
+  },
+  "_note": "Place under scan_profiles with a unique key. Replace paths. No server, browser, runtime fixture, or model grant is implicitly authorized. See docs/python-analysis.md for explicitly bound advanced plans."
+}

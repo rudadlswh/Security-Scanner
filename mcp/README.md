@@ -9,3 +9,5 @@
 모델·외부 네트워크·일회용 서버는 기본 연결만으로 승인되지 않는다. [실행 설정](../docs/folder-scan.md)을 별도로 준비한다. 기존 연결이 유지 중이면 새 프로세스가 실제 수정 코드를 읽었는지 구분한다.
 
 `.agents/skills`의 네 명령은 고정 Java 예제 검사·그 공지 대조·보고서 조회·과거 합성 요약용 호환 기능이다. 예제 대상 경로나 과거 요약 자료가 없으면 해당 명령을 사용할 수 없다. 새 폴더의 통합 검사는 이 명령들과 구분해 `scan_project`를 사용한다.
+
+Python /7은 같은 27개 도구의 지원 구간 확장이다. [Python 분석 안내](../docs/python-analysis.md)와 [프로필 자리표시자](python-scan-profile.example.json)를 참고한다. 원문 Python의 기존 Java AI 전송은 거부한다.

@@ -133,6 +133,7 @@ def markdown(report: dict) -> str:
         lines += ["", "## 소스 보안 후보와 수정 검증", "", "AST 입력 흐름 후보이며 실제 악용이나 보안 원인을 확정하지 않습니다.", ""]
         for f in static:
             lines += ["- " + cell(f"{f['rule_id']} {f['path']}:{f['line']}"),
+                      "  - 탐지 엔진: " + cell(f.get('engine','LOCALCODE_JAVA_AST')),
                       "  - 추적 입력: " + cell(f["source_parameters"]),
                       "  - 조건부 수정: " + cell(f["remediation"]["change"]),
                       "  - 검증: " + cell(f["remediation"]["tests"])]
@@ -317,7 +318,7 @@ class ProjectScans:
                       "limits": {"max_endpoints": max_endpoints, "max_ai_endpoints": max_ai_endpoints,
                                  "include_remediation": include_remediation, "remediation_max_findings": 20},
                       "security_verdict": "NOT_ASSESSED", "limitations": [
-                          "Java/Spring 중심의 제한된 선언 연결이며 자동 수집의 완전성을 증명하지 않는다.",
+                          "Java/Spring·Python http.server 지원 구간의 제한된 선언 연결이며 자동 수집의 완전성을 증명하지 않는다.",
                           "AI 응답은 형식 검증을 거친 관찰이며 의미 정확성을 자동 승인하지 않는다.",
                           "CVE는 제공/해석된 패키지의 버전 영향 대조이며 악용 검증이 아니다.",
                           "동적 검사는 등록된 일회용 서버·명시 시나리오에 한정된다.",
@@ -400,7 +401,11 @@ class ProjectScans:
                          "reasons": info["support_reasons"], "excluded_sources": info["snapshot"]["excluded"],
                          "endpoint_count": len(info["endpoints"]), "endpoints_collected": 0,
                          "endpoints_omitted_by_limit": max(0, len(info["endpoints"]) - maximum)}
-                if not any(p.endswith(".java") for p in snapshot.files):
+                if info.get('source_language') == 'Python':
+                    report['languages']['supported_source'].append('Python/http.server literal dispatch subset')
+                    report['languages']['unsupported_source'] = [n for n in report['languages']['unsupported_source'] if n != 'Python']
+                    stage.update(source_language='Python',raw_source_allowed_for_ai=False)
+                elif not any(p.endswith(".java") for p in snapshot.files):
                     stage.update(status="UNSUPPORTED", reason="NO_SUPPORTED_JAVA_SOURCES")
                 elif not info["endpoints"]:
                     stage.update(status="PARTIAL", reason="NO_SUPPORTED_SPRING_ENDPOINTS")
@@ -421,6 +426,8 @@ class ProjectScans:
                         collection = await asyncio.to_thread(collect, config, report["project_id"], endpoint["endpoint_id"], prepared=prepared)
                         row.update(collection_id=collection["collection_id"], evidence_count=len(collection["evidence"]),
                                    unresolved_calls=len(collection["unresolved_calls"]), collection_status="COMPLETED", ai_status="PENDING")
+                        if collection.get('source_language') == 'Python':
+                            row.update(ai_status='SKIPPED',ai_skip_reason='PYTHON_RAW_SOURCE_AI_NOT_SUPPORTED')
                         stage["endpoints_collected"] += 1
                     except Exception as error:
                         row.update(collection_status="INCOMPLETE", ai_status="SKIPPED", reason=safe_error(error))
@@ -480,14 +487,22 @@ class ProjectScans:
 
             phase("DEPENDENCY_CVES")
             try:
-                cves = await scan_cves(config, report["project_id"], config.allow_osv_network)
+                if snapshot is not None and info.get('source_language') == 'Python':
+                    from .python_dependencies import scan as scan_python_cves
+                    cves = await asyncio.to_thread(scan_python_cves, config, report['project_id'], snapshot)
+                else:
+                    cves = await scan_cves(config, report["project_id"], config.allow_osv_network)
                 report["checks"]["cve"] = {"status": "COMPLETED" if cves["status"] == "COMPLETED_FOR_LISTED_PACKAGES" and cves["inventory"]["packages"] else "PARTIAL",
                     "report_id": cves["report_id"], "coverage": cves["inventory"]["coverage"],
                     "online_queries": cves["queries_sent"], "package_count": len(cves["inventory"]["packages"]),
                     "reason": "ONLINE_QUERY_APPROVED" if config.allow_osv_network else "CACHE_ONLY_OSV_NETWORK_NOT_APPROVED",
                     "unresolved": cves["inventory"]["unresolved"]}
                 if not cves["inventory"]["packages"]:
-                    report["checks"]["cve"].update(status="SKIPPED", reason="NO_SUPPORTED_RESOLVED_MAVEN_PACKAGES")
+                    report["checks"]["cve"].update(status="SKIPPED", reason="NO_SUPPORTED_EXACT_PYPI_PINS" if cves['inventory'].get('source_ecosystem')=='PyPI' else "NO_SUPPORTED_RESOLVED_MAVEN_PACKAGES")
+                if cves['inventory'].get('source_ecosystem')=='PyPI':
+                    report['checks']['cve'].update(reason='EXPLICIT_PYPI_ADAPTER' if cves['queries_sent'] else 'PYPI_NETWORK_OR_TOOL_NOT_APPROVED',
+                        engine='PIP_AUDIT',raw_advisory_count=cves.get('raw_advisory_count',0),
+                        unique_package_advisory_count=cves.get('unique_package_advisory_count',0))
                 for package in cves["packages"]:
                     for group in package.get("vulnerability_groups", []):
                         finding({"kind": "DEPENDENCY_VERSION_MATCH", "identifiers": group["identifiers"],
@@ -497,7 +512,21 @@ class ProjectScans:
                 fail("cve", error)
 
             phase("DYNAMIC_HTTP")
-            if profile is None:
+            if profile and profile.get('python_validation') and snapshot is not None and info.get('source_language') == 'Python':
+                try:
+                    from .python_validation import run as run_python_validation
+                    child = await run_python_validation(config, report['project_id'], snapshot, info, static, profile, folder)
+                    report['checks']['dynamic'] = {'status':child['status'],'report_id':child['report_id'],
+                        'case_count':len(child['cases']),'matched':sum(c['matches'] for c in child['cases']),
+                        'requests_sent':child['requests_sent'],'browser':child['browser'],'server':child['server']}
+                    report['python_evidence_links'] = [{'scenario_id':c['id'],'http_report_id':child['report_id'],
+                        'source_link_status':c['source_link_status'],'static_evidence_ids':c.get('static_evidence_ids',[]),
+                        'registered_behavior_matches':c['matches'],'intent':c['intent'],'binding':c['binding']}
+                        for c in child['cases'] if c.get('binding')]
+                    if child['status']!='COMPLETED':report['errors'].append({'stage':'dynamic','reason':child.get('reason','PYTHON_VALIDATION_MISMATCH')})
+                except asyncio.CancelledError:raise
+                except Exception as error:fail('dynamic',error)
+            elif profile is None:
                 report["checks"]["dynamic"] = {"status": "SKIPPED", "reason": "NO_OPERATOR_REGISTERED_SCAN_PROFILE"}
             else:
                 try:
@@ -536,6 +565,20 @@ class ProjectScans:
             if snapshot is not None:
                 await asyncio.to_thread(snapshot.verify)
                 report["source_snapshot_unchanged"] = True
+            if profile and profile.get('python_dependency_runtime'):
+                phase('PYTHON_DEPENDENCY_RUNTIME')
+                from .python_runtime import run as run_python_runtime
+                task = asyncio.create_task(asyncio.to_thread(run_python_runtime,config,report['project_id'],profile['python_dependency_runtime']))
+                try:
+                    result = await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    await task
+                    raise
+                report['checks']['dependency_runtime'] = {'status':'COMPLETED' if result['status']=='MATCHES_REGISTERED_CHECKS' else 'INCOMPLETE',
+                    'report_id':result['report_id'],'verification':result['status'],
+                    'registered_conditions_fixed':result.get('registered_conditions_fixed',False),
+                    'ordinary_api_checks_passed':result.get('ordinary_api_checks_passed',False),
+                    'application_runtime_use_proven':False,'deployment_compatibility_proven':False,'cleanup':result['cleanup']}
             phase("AI_REMEDIATION")
             advice = report["checks"]["remediation"]
             context_error = None

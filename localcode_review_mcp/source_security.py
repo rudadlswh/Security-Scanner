@@ -16,6 +16,12 @@ REMEDIES = {
 
 
 def scan_source_security(config, project_id, prepared=None):
+    if prepared is None:
+        from .collector import inventory
+        prepared = inventory(config, project_id)
+    if prepared[2].get('source_language') == 'Python':
+        from .python_tools import scan_python_security
+        return scan_python_security(config, project_id, prepared)
     root, settings = config.project(project_id)
     snapshot = prepared[0] if prepared else Snapshot.read(root, settings.get('commit'))
     files = sorted(p for p in snapshot.files if p.endswith('.java'))
