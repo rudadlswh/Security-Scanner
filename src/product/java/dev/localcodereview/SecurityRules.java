@@ -13,6 +13,8 @@ import java.nio.file.*;
 import java.util.*;
 
 public final class SecurityRules {
+    record Owner(CompilationUnitTree unit, ClassTree tree, String path, String qualified,
+                 Set<String> imports, Map<String,String> fields) {}
     static final Set<String> MAPPINGS = Set.of("RequestMapping","GetMapping","PostMapping","PutMapping","DeleteMapping","PatchMapping");
     static String shortName(String name) { return name.substring(name.lastIndexOf('.')+1); }
     static boolean springAnnotation(ModifiersTree modifiers, Set<String> names, Set<String> imports) {
@@ -33,7 +35,7 @@ public final class SecurityRules {
             paths.add(p);
         }
         if(paths.isEmpty() || paths.size()>500) throw new IllegalArgumentException("SECURITY_FILE_COUNT");
-        ObjectNode result=Json.object().put("engine","JAVAC_INTRAPROCEDURAL_TAINT_1");
+        ObjectNode result=Json.object().put("engine","JAVAC_BOUNDED_DECLARED_CALL_TAINT_2");
         ArrayNode findings=result.putArray("findings"),errors=result.putArray("errors");
         JavaCompiler compiler=ToolProvider.getSystemJavaCompiler();
         if(compiler==null)throw new IllegalStateException("JDK_COMPILER_UNAVAILABLE");
@@ -43,6 +45,7 @@ public final class SecurityRules {
             JavacTask task=(JavacTask)compiler.getTask(new StringWriter(),manager,diagnostics,List.of("-proc:none","-encoding","UTF-8"),null,manager.getJavaFileObjectsFromPaths(paths));
             Iterable<? extends CompilationUnitTree> units=task.parse();
             SourcePositions positions=Trees.instance(task).getSourcePositions();
+            List<Owner> owners=new ArrayList<>();
             for(CompilationUnitTree unit:units) {
                 String relative=root.relativize(Path.of(unit.getSourceFile().toUri())).toString().replace('\\','/');
                 Set<String> imports=new HashSet<>();unit.getImports().forEach(i->imports.add(i.getQualifiedIdentifier().toString()));
@@ -50,13 +53,17 @@ public final class SecurityRules {
                     if(!(declaration instanceof ClassTree cls))continue;
                     Map<String,String> fields=new HashMap<>();
                     for(Tree member:cls.getMembers()) if(member instanceof VariableTree v) fields.put(v.getName().toString(),String.valueOf(v.getType()));
-                    for(Tree member:cls.getMembers()) {
-                        if(!(member instanceof MethodTree method) || method.getBody()==null || !springAnnotation(method.getModifiers(),MAPPINGS,imports))continue;
+                    String pkg=unit.getPackageName()==null?"":unit.getPackageName().toString()+".";
+                    owners.add(new Owner(unit,cls,relative,pkg+cls.getSimpleName(),imports,fields));
+                }
+            }
+            for(Owner owner:owners) {
+                    for(Tree member:owner.tree().getMembers()) {
+                        if(!(member instanceof MethodTree method) || method.getBody()==null || !springAnnotation(method.getModifiers(),MAPPINGS,owner.imports()))continue;
                         inspected++;
-                        new Flow(unit,positions,relative,cls,method,imports,fields,findings).scan(method.getBody(),null);
+                        new Flow(owner,positions,method,findings,owners,List.of(owner.qualified()+"."+method.getName()),0).scan(method.getBody(),null);
                         if(findings.size()>1000)throw new IllegalArgumentException("STATIC_FINDING_LIMIT");
                     }
-                }
             }
         }
         for(Diagnostic<? extends JavaFileObject> d:diagnostics.getDiagnostics()) if(d.getKind()==Diagnostic.Kind.ERROR)errors.addObject().put("code",d.getCode()).put("line",d.getLineNumber());
@@ -66,14 +73,16 @@ public final class SecurityRules {
     static final class Flow extends TreeScanner<Void,Void> {
         final CompilationUnitTree unit;final SourcePositions positions;final String path;final MethodTree method;final Set<String> imports;final ArrayNode findings;
         final Map<String,String> types;Map<String,Set<String>> taints=new HashMap<>(),htmlTaints=new HashMap<>();final Set<String> emitted=new HashSet<>();boolean html;
-        Flow(CompilationUnitTree u,SourcePositions p,String path,ClassTree cls,MethodTree method,Set<String> imports,Map<String,String> fields,ArrayNode findings) {
-            this.unit=u;this.positions=p;this.path=path;this.method=method;this.imports=imports;this.findings=findings;types=new HashMap<>(fields);
+        final Owner owner; final List<Owner> owners; final List<String> chain; final int depth;
+        Flow(Owner owner,SourcePositions p,MethodTree method,ArrayNode findings,List<Owner> owners,List<String> chain,int depth) {
+            this.owner=owner;this.owners=owners;this.chain=chain;this.depth=depth;
+            this.unit=owner.unit();this.positions=p;this.path=owner.path();this.method=method;this.imports=owner.imports();this.findings=findings;types=new HashMap<>(owner.fields());
             for(VariableTree v:method.getParameters()) {
                 String name=v.getName().toString(),t=String.valueOf(v.getType());types.put(name,t);
                 // Principal/SecurityContext는 외부 요청 문자열로 취급하지 않는다.
                 if(springAnnotation(v.getModifiers(),Set.of("RequestParam","PathVariable","RequestBody","RequestHeader"),imports)){taints.put(name,Set.of(name));htmlTaints.put(name,Set.of(name));}
             }
-            List<AnnotationTree> annotations=new ArrayList<>(cls.getModifiers().getAnnotations());annotations.addAll(method.getModifiers().getAnnotations());
+            List<AnnotationTree> annotations=new ArrayList<>(owner.tree().getModifiers().getAnnotations());annotations.addAll(method.getModifiers().getAnnotations());
             for(AnnotationTree a:annotations) for(ExpressionTree e:a.getArguments()) {
                 if(e instanceof AssignmentTree assign && assign.getVariable().toString().equals("produces") && assign.getExpression().toString().contains("text/html"))html=true;
             }
@@ -108,6 +117,8 @@ public final class SecurityRules {
             ObjectNode f=findings.addObject().put("rule_id",rule).put("cwe",cwe).put("path",path).put("line",line)
                 .put("method",method.getName().toString()).put("confidence","STATIC_CANDIDATE").put("source_kind","HTTP_PARAMETER");
             ArrayNode source=f.putArray("source_parameters");sources.forEach(source::add);
+            ArrayNode route=f.putArray("declared_call_chain");chain.forEach(route::add);
+            f.put("runtime_dispatch_proven",false);
         }
         @Override public Void visitVariable(VariableTree v,Void unused) {
             types.put(v.getName().toString(),String.valueOf(v.getType()));
@@ -136,7 +147,34 @@ public final class SecurityRules {
                 boolean writer=type(t,"java.io.PrintWriter",imports) || type(t,"java.io.Writer",imports);
                 if(writer && Set.of("write","print","println").contains(n))emit("LCR-XSS-001","CWE-79",call,trace(call.getArguments().get(0),true));
             }
+            follow(call);
             return super.visitMethodInvocation(call,unused);
+        }
+        void follow(MethodInvocationTree call) {
+            if(depth>=8 || findings.size()>1000)return;
+            String receiver=receiver(call),declared=receiver.equals("this")?owner.qualified():types.get(receiver.startsWith("this.")?receiver.substring(5):receiver);
+            if(declared==null)return;
+            final String declaredType=declared.replaceAll("<.*>","");
+            String pkg=owner.unit().getPackageName()==null?"":owner.unit().getPackageName().toString()+".";
+            List<Owner> targets=owners.stream().filter(o -> o.qualified().equals(declaredType) ||
+                o.qualified().equals(pkg+declaredType) || imports.contains(o.qualified()) && o.tree().getSimpleName().toString().equals(declaredType)).toList();
+            if(targets.size()!=1)return;
+            Owner target=targets.get(0);
+            List<MethodTree> methods=new ArrayList<>();
+            for(Tree t:target.tree().getMembers())if(t instanceof MethodTree m && m.getName().toString().equals(name(call)) && m.getParameters().size()==call.getArguments().size())methods.add(m);
+            if(methods.size()!=1 || methods.get(0).getBody()==null)return;
+            MethodTree dest=methods.get(0);String symbol=target.qualified()+"."+dest.getName();
+            if(chain.contains(symbol))return;
+            List<String> route=new ArrayList<>(chain);route.add(symbol);
+            Flow child=new Flow(target,positions,dest,findings,owners,route,depth+1);
+            child.taints.clear();child.htmlTaints.clear();
+            boolean any=false;
+            for(int i=0;i<dest.getParameters().size();i++) {
+                Set<String> raw=trace(call.getArguments().get(i)),htmlRaw=trace(call.getArguments().get(i),true);
+                String parameter=dest.getParameters().get(i).getName().toString();
+                child.taints.put(parameter,raw);child.htmlTaints.put(parameter,htmlRaw);any|=!raw.isEmpty();
+            }
+            if(any)child.scan(dest.getBody(),null);
         }
         @Override public Void visitReturn(ReturnTree r,Void unused){if(html)emit("LCR-XSS-001","CWE-79",r,trace(r.getExpression(),true));return super.visitReturn(r,unused);}
         @Override public Void visitClass(ClassTree nested,Void unused){return null;}

@@ -114,8 +114,27 @@ public final class ProductBridge {
                         row.set("annotations", annotations(method.getModifiers()));
                         ObjectNode parameters = row.putObject("parameters"), locals = row.putObject("locals");
                         method.getParameters().forEach(p -> parameters.put(p.getName().toString(), declaredType(p)));
+                        ArrayNode parameterTypes = row.putArray("parameter_types");
+                        method.getParameters().forEach(p -> parameterTypes.add(declaredType(p)));
                         ArrayNode calls = row.putArray("calls");
                         if (method.getBody() != null) new TreeScanner<Void, Void>() {
+                            int deferredDepth = 0;
+                            String argumentType(ExpressionTree arg) {
+                                if (arg instanceof LiteralTree literal) {
+                                    Object v = literal.getValue();
+                                    if (v instanceof String) return "java.lang.String";
+                                    if (v instanceof Integer) return "int";
+                                    if (v instanceof Long) return "long";
+                                    if (v instanceof Boolean) return "boolean";
+                                }
+                                if (arg instanceof IdentifierTree id) {
+                                    String n=id.getName().toString();
+                                    return locals.has(n)?locals.path(n).asText():parameters.has(n)?parameters.path(n).asText():fields.path(n).asText("<UNKNOWN>");
+                                }
+                                if (arg instanceof TypeCastTree cast) return cast.getType().toString();
+                                if (arg instanceof NewClassTree instance) return instance.getIdentifier().toString();
+                                return "<UNKNOWN>";
+                            }
                             @Override public Void visitMethodInvocation(MethodInvocationTree call, Void unused) {
                                 if (++callCount > 100_000) throw new IllegalArgumentException("AST_CALL_COUNT_LIMIT");
                                 String receiver = "this", name;
@@ -125,9 +144,23 @@ public final class ProductBridge {
                                             : select.getExpression().toString().matches("this\\.[A-Za-z_$][A-Za-z0-9_$]*")
                                             ? select.getExpression().toString().substring(5) : "<COMPLEX_RECEIVER>";
                                 } else name = call.getMethodSelect().toString();
-                                calls.addObject().put("receiver", receiver).put("name", name).put("arity", call.getArguments().size())
-                                        .put("line", unit.getLineMap().getLineNumber(Math.max(0, positions.getStartPosition(unit, call))));
+                                ObjectNode callRow=calls.addObject().put("receiver", receiver).put("name", name).put("arity", call.getArguments().size())
+                                        .put("line", unit.getLineMap().getLineNumber(Math.max(0, positions.getStartPosition(unit, call))))
+                                        .put("execution_context", deferredDepth>0?"DEFERRED_CALLBACK_CONTEXT":"LEXICAL_CALL")
+                                        .put("kind", "INVOCATION");
+                                ArrayNode argumentTypes=callRow.putArray("argument_types");
+                                call.getArguments().forEach(a->argumentTypes.add(argumentType(a)));
                                 return super.visitMethodInvocation(call, unused);
+                            }
+                            @Override public Void visitLambdaExpression(LambdaExpressionTree lambda, Void unused) {
+                                deferredDepth++;
+                                try {return super.visitLambdaExpression(lambda,unused);} finally {deferredDepth--;}
+                            }
+                            @Override public Void visitMemberReference(MemberReferenceTree ref, Void unused) {
+                                calls.addObject().put("receiver",ref.getQualifierExpression().toString()).put("name",ref.getName().toString())
+                                    .put("arity",-1).put("kind","METHOD_REFERENCE").put("execution_context","DEFERRED_CALLBACK_CONTEXT")
+                                    .put("line",unit.getLineMap().getLineNumber(Math.max(0,positions.getStartPosition(unit,ref))));
+                                return null;
                             }
                             @Override public Void visitVariable(VariableTree variable, Void unused) {
                                 locals.put(variable.getName().toString(), declaredType(variable));

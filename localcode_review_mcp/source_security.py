@@ -16,6 +16,12 @@ REMEDIES = {
 
 
 def scan_source_security(config, project_id, prepared=None):
+    if prepared is None:
+        from .collector import inventory
+        prepared = inventory(config, project_id)
+    if prepared[2].get('source_language') == 'Python':
+        from .python_tools import scan_python_security
+        return scan_python_security(config, project_id, prepared)
     root, settings = config.project(project_id)
     snapshot = prepared[0] if prepared else Snapshot.read(root, settings.get('commit'))
     files = sorted(p for p in snapshot.files if p.endswith('.java'))
@@ -32,11 +38,11 @@ def scan_source_security(config, project_id, prepared=None):
     report = {**result,'report_id':identifier,'kind':'source-security','project_id':project_id,
         'status':'PARTIAL' if result['errors'] or snapshot.excluded else 'COMPLETED_FOR_RULESET',
         'snapshot_sha256':digest(snapshot.metadata()), 'source_snapshot_unchanged':True,
-        'ruleset':'JAVA_HTTP_SQL_HTML_SSRF_1','model_calls':0,
-        'coverage':{'method':'AST_PARSE_INTRAPROCEDURAL_TAINT','rules':list(REMEDIES),
+        'ruleset':'JAVA_HTTP_SQL_HTML_SSRF_2','model_calls':0,
+        'coverage':{'method':'AST_BOUNDED_DECLARED_CALL_TAINT','max_call_depth':8,'rules':list(REMEDIES),
                     'source_files':len(files),'excluded':snapshot.excluded,
                     'limits':['No complete type or external symbol resolution.',
-                              'No interprocedural, reflection, async or framework-generated dataflow proof.',
+                              'Direct unique declared calls propagate parameters up to 8 levels; ambiguous/interface dispatch, reflection, async timing and return-value summaries remain incomplete.',
                               'Only annotated request parameters and supported sinks; absence is not safety.',
                               'Sanitizer recognition is limited; each candidate requires source review.']}}
     save_json(store.folder(identifier)/'report.json', report)

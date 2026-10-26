@@ -10,11 +10,24 @@ python -m pip install -r requirements-mcp.txt
 .\gradlew.bat --no-daemon prepareProductRuntime
 python -m unittest discover -s scripts -p 'test_*.py' -v
 python scripts/smoke_mcp_product.py
+python scripts/smoke_mcp_adoption.py
 python scripts/smoke_mcp_prompts.py --receipt results/prompts-NEW.json
 ```
 
 단위 테스트는 모델 생성·온라인 OSV 조회를 하지 않는다. 일부는 로컬 임시 HTTP 서버를 실행한다. Java AST 테스트는 `JAVA_HOME`과 제품 브리지 빌드가 없으면 건너뛴다. Docker 제한 테스트는 기본적으로 대역 엔진을 사용하며 실제 격리 검증으로 세지 않는다.
 
+감사 계약 테스트는 임시 Ed25519 키로 위조·작성자·변경 해시·심각도·예산 부족·동시 실행·취소·승인 철회 등을 확인한다. `smoke_mcp_adoption.py`는 새 STDIO에서 감사 검증 시작/상태/보고서 흐름과 잘못된 입력 거부를 확인하며 실제 모델을 호출하지 않는다. 제품 코드 변경 후에는 MCP를 재연결하고 `runtime_provenance.restart_required=false`를 확인한다.
+
 자체 Spring 샘플과 실제 Docker 검증은 별도 준비·실행 작업이다. `smoke_mcp_assurance.py`·`verify_container_*.py`는 명시한 테스트 서버를 실제 실행한다. 소스·결과가 폐기 가능한지 확인하고 `--help`와 샘플 빌드 태스크를 읽은 뒤 별도로 실행한다. 설치·이미지 pull·새 AI 호출은 기본 테스트가 수행하지 않는다.
 
 테스트 통과는 지원하는 경로와 등록된 기대 조건의 확인이다. 새로운 프로젝트의 코드 안전성이나 보안 원인의 독립 검증을 대신하지 않는다.
+
+## Python /7 회귀
+
+```powershell
+python -m unittest discover -s scripts -p test_python_integration.py -v
+```
+
+포함된 합성 http.server 복사본을 이용하며 source-to-sink 구분·정상/개선 경로·계획 변조·raw AI 차단·실행 복사본 불일치·브라우저 응답 오류 오판을 확인한다. 실제 Bandit/브라우저/온라인 CVE를 실행하는 테스트가 아니다. 실제 전체 검사는 별도 도구 환경과 명시한 로컬 프로필이 필요하다.
+
+`verify_python_scan.py`는 등록 프로필의 실제 검사 실행기다. 모델 호출을 요청하지 않지만 프로필이 허용한 HTTP/브라우저/패키지 조회·대표 의존성 probe를 수행할 수 있다. 저장 결과 조회를 위해 실행하지 않는다.

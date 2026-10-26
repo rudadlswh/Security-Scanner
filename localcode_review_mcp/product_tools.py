@@ -16,20 +16,32 @@ from .http_checks import run_http_checks
 from .reviews import ReviewJobs
 from .project_scan import ProjectScans
 from .fix_verification import FixVerifications
+from .audit_jobs import AuditVerificationJobs
 from .remediation_compact import VERSION as REMEDIATION_VERSION
 from .workspace import ProductConfig, ProductError, ProductStore, REPO, load_json
+from . import provenance
 
 
 def register_product_tools(server: FastMCP, config_path: Path, jdk: Path | None):
     jobs: ReviewJobs | None = None
     scans: ProjectScans | None = None
     fixes: FixVerifications | None = None
+    audits: AuditVerificationJobs | None = None
     http_running = False
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     local_write = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
     def config():
         return ProductConfig.read(config_path, jdk)
+
+    def audit_jobs():
+        nonlocal audits
+        current=config()
+        if audits is None:
+            audits=AuditVerificationJobs(current)
+        elif all(task.done() for task in audits.tasks.values()):
+            audits.config=current;audits.store=ProductStore(current.results)
+        return audits
 
     def review_jobs():
         nonlocal jobs
@@ -63,6 +75,7 @@ def register_product_tools(server: FastMCP, config_path: Path, jdk: Path | None)
 
     async def guarded(function, *args):
         try:
+            provenance.execution_receipt()
             if asyncio.iscoroutinefunction(function):
                 return await function(*args)
             return await asyncio.to_thread(function, *args)
@@ -75,22 +88,29 @@ def register_product_tools(server: FastMCP, config_path: Path, jdk: Path | None)
     def get_product_capabilities() -> dict:
         """제품 확장 설정·준비 상태 조회. 모델/HTTP/CVE 요청을 보내지 않습니다."""
         cfg = config()
-        return {"implementation": "product-workflow/3", "validation_status": "READ_LOCAL_VERIFICATION_RECEIPTS; THIS_CALL_RUNS_NO_TESTS",
+        return {"implementation": "product-workflow/7", "runtime_provenance": provenance.status(),
+                "audit_contract": "audit-ledger/2; REGISTERED_ED25519_KEY; BOUNDED_FILES_HTTP_BOUNDARIES_SINKS",
+                "audit_verifier": "DISTINCT_MODEL_DIGEST; VERIFICATION_ONLY_SINGLE_USE_GRANT; HUMAN_SIGNED_REVIEW_REQUIRED",
+                "validation_status": "READ_LOCAL_VERIFICATION_RECEIPTS; THIS_CALL_RUNS_NO_TESTS",
                 "projects": list(cfg.projects), "http_targets": list(cfg.http_targets), "jdk_configured": cfg.jdk is not None,
                 "java_bridge_built": (REPO / "build/product/classes/dev/localcodereview/ProductBridge.class").is_file(),
                 "configuration_file_present": config_path.is_file(), "osv_network_enabled": cfg.allow_osv_network,
                 "model_authorization_present": (cfg.results / "control/model-authorization.json").is_file(),
                 "scope_confirmation": "LOCAL_OPERATOR_NOT_MODEL", "default_raw_logs": "OFF", "checks_executed_by_this_call": 0,
-                "folder_scan_tool": "scan_project", "supported_source_languages": ["Java/Spring supported subset"],
+                "folder_scan_tool": "scan_project", "supported_source_languages": ["Java/Spring supported subset", "Python/http.server literal dispatch subset"],
+                "python_detectors": "LOCALCODE_AST_SQL_XSS_IDOR_PATH_AND_OPERATOR_PINNED_BANDIT; LOCAL_ONLY_NO_AI",
+                "python_validation": "HASH_BOUND_READ_ONLY_HTTP_AND_OPTIONAL_PLAYWRIGHT_EDGE; EXPLICIT_OPERATOR_PROFILE",
                 "disposable_server_execution": "EXPLICIT_LOCAL_SCAN_PROFILE_ONLY",
                 "ai_remediation": "HTTP_FOCUS_SELECTION_ONLY; NO_GENERATED_FREE_TEXT; ONE_EXISTING_AUTHORIZED_CALL_RESERVED; UNREVIEWED_NO_AUTO_APPLY",
                 "cve_remediation": "HARNESS_EXACT_ADVISORY_CANDIDATES_AND_CHECKLIST; ZERO_MODEL_CALLS; COMPATIBILITY_UNVERIFIED",
                 "remediation_contract": REMEDIATION_VERSION, "http_evidence_contract": "http-expectations/2",
                 "verification_conditions": "HARNESS_NOT_MODEL",
                 "source_security_rules": ["SQL_HTTP_INPUT", "HTML_HTTP_OUTPUT", "RESTTEMPLATE_HTTP_DESTINATION"],
-                "source_security_limits": "INTRAPROCEDURAL_AST_CANDIDATES_NOT_COMPLETE_SECURITY_PROOF",
+                "source_security_limits": "BOUNDED_DECLARED_CALL_TAINT_DEPTH_8_NOT_COMPLETE_SECURITY_PROOF",
+                "assurance_cli": ["freeze-benchmark", "benchmark", "validate-source-proposal", "record-independent-review", "record-audit-review", "authorize-audit-verifier", "verify-audit-candidates", "acknowledge-audit-failure"],
+                "optional_source_analysis": "CLI_ANALYZE_SOURCE_EXPLICIT_OPT_IN_AND_DIAGNOSTIC_BUDGET; CLAIMS_NOT_REVIEWED",
                 "resolved_inventory_binding": "SOURCE_AND_APPLICATION_AND_RUNTIME_JAR_HASHES",
-                "strong_isolation": "OPT_IN_LOCAL_LINUX_DOCKER_DIGEST_PINNED; ENGINE_UNAVAILABLE_FAILS_CLOSED; LIVE_VERIFICATION_REQUIRED",
+                "strong_isolation": "OPT_IN_LOCAL_LINUX_DOCKER_DIGEST_PINNED; DEFAULT_NETWORK_NONE_IPV6_DISABLED; NO_LOCAL_FALLBACK",
                 "copy_fix_verification": "OPERATOR_HASH_PINNED_BUNDLE_AND_BUILD_PROFILE; ORIGINAL_NEVER_MODIFIED"}
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
@@ -100,6 +120,24 @@ def register_product_tools(server: FastMCP, config_path: Path, jdk: Path | None)
         get_fix_verification_status로 완료·정리 상태를 조회합니다. 모델/외부 CVE 호출 없음.
         """
         return await guarded(fix_jobs().start, project_path)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+    async def verify_audit_candidates(report_id: str, grant_id: str) -> dict:
+        """로컬에서 미리 승인한 검증 전용 grant의 작업을 시작하고 job_id를 즉시 반환합니다. 별도 모델에 제한 소스 구간을 보냅니다.
+        예산/opt-in/모델 분리가 없으면 호출 없이 deferred입니다. 결과는 사람 서명 검토 전 미확정이며 원문을 반환하지 않습니다.
+        """
+        return await guarded(audit_jobs().start, report_id, grant_id)
+
+    @server.tool(annotations=readonly)
+    def get_audit_verification_status(job_id: str) -> dict:
+        """감사 검증 작업의 상태를 조회합니다. 재시작된 작업을 자동 재전송하지 않습니다."""
+        try:return audit_jobs().status(job_id)
+        except (ValueError,OSError,KeyError,TypeError):raise ToolError('AUDIT_VERIFICATION_STATUS_UNAVAILABLE') from None
+
+    @server.tool(annotations=local_write)
+    async def cancel_audit_verification(job_id: str) -> dict:
+        """감사 검증을 취소합니다. 전송 후 완료가 불명확하면 잠금·차감은 유지합니다."""
+        return await guarded(audit_jobs().cancel, job_id)
 
     @server.tool(annotations=readonly)
     def get_fix_verification_status(job_id: str) -> dict:
@@ -196,7 +234,7 @@ def register_product_tools(server: FastMCP, config_path: Path, jdk: Path | None)
         """제품 조사/관찰/CVE/HTTP 결과 ID를 조회합니다. 진단 원문·토큰·임의 파일은 반환하지 않습니다."""
         try:
             result = ProductStore(config().results).read(report_id)
-            if result.get("kind") not in {"endpoint-review", "dependency-cve", "http-security", "project-security-scan", "security-remediation", "source-security", "fix-verification"}:
+            if result.get("kind") not in {"endpoint-review", "dependency-cve", "http-security", "project-security-scan", "security-remediation", "source-security", "fix-verification", "benchmark", "source-proposal-review", "independent-review-receipt", "audit-review-receipt", "audit-verification", "audit-verification-job", "python-http-validation", "python-dependency-runtime"}:
                 raise ToolError("UNSUPPORTED_PRODUCT_REPORT_KIND")
             return result
         except (ValueError, OSError, KeyError):

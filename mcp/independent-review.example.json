@@ -1,0 +1,6 @@
+{
+  "report_sha256": "REPLACE_WITH_CANONICAL_REPORT_SHA256",
+  "reviewer_id": "REPLACE_WITH_REAL_REVIEWER",
+  "not_involved_in_implementation_or_expected_results": true,
+  "items": [{"id": "case-1", "verdict": "UNRESOLVED", "rationale": "REPLACE_WITH_ACTUAL_REVIEW"}]
+}

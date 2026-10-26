@@ -1,62 +1,96 @@
-# Security Scanner · LocalCode Review
+# LocalCode Review
 
-Java/Spring 프로젝트 폴더를 조사하고 소스 보안 후보, 의존성 CVE, 승인된 HTTP 시나리오를 통합 보고서로 제공하는 로컬 MCP 서버다. Python CLI로도 실행할 수 있다. 실험적인 도구이며 검사 완료가 코드 전체의 안전을 뜻하지 않는다.
+Java/Spring 및 Python http.server 지원 구간을 읽기 전용으로 조사하고 AST 보안 후보·승인된 로컬 AI 관찰·의존성 공지·등록 HTTP 검사·복사본 수정 검증을 연결한다. 현재 개발 버전은 **product-workflow/7**, 기본 HTTP 점검 영역 계약은 **security-remediation/17**, MCP는 **27개 도구/4개 프롬프트**다.
 
-## 기능
+현재 기능과 게시용 검증 범위는 [검증 안내](docs/verification.md)를 따른다. 전체 보안·독립 검토·모든 프로젝트 정확성을 보증하지 않는다.
 
-| 기능 | 범위 |
+## 사용
+
+- 폴더 통합 검사: MCP `scan_project(project_path)` 또는 `python -m localcode_review_mcp scan PROJECT_PATH`.
+- AI 없는 검사: `scan PROJECT_PATH --max-ai-endpoints 0 --no-remediation`.
+- 새 수집 평가: `freeze-benchmark`, `benchmark`.
+- 선택형 소스 기반 AI 가설: `analyze-source`; 프로젝트 opt-in·별도 활성 예산·진단 저장 승인 필요.
+- 저장 AI 가설 근거 대조: `validate-source-proposal`.
+- 독립 검토자 선언·판정 기록: `record-independent-review`. 검토자를 자동 생성하거나 신원을 인증하지 않는다.
+- 범위·후보 감사 원장: 통합 보고서의 `audit`와 로컬 `record-audit-review`. [입력 계약과 한계](docs/audit-contract.md).
+- 새 감사 검토는 등록 Ed25519 키 서명을 요구한다. 선택형 `verify_audit_candidates`는 별도 모델·새 검증 전용 승인만 사용하며 자동 확정하지 않는다.
+- 기존 `/` 명령 `localcode-check`, `localcode-cve`, `localcode-reports`, `localcode-summary`는 고정 예제/과거 결과용이다.
+
+[폴더 검사](docs/folder-scan.md) · [새 평가·소스 분석·CVE 수정 검증](docs/assurance-workflows.md) · [MCP 연결](mcp/README.md) · [Python 검사](docs/python-analysis.md)
+
+## MCP 도구 목록
+
+현재 연결에 노출된 도구는 27개다. 아래 이름은 MCP 도구 이름이며, 채팅용 슬래시 명령은 다음 절에 정리했다.
+
+| 도구 | 기능 |
 | --- | --- |
-| 폴더 조사 | Java/Spring 엔드포인트와 관련 코드를 수집하고 누락·미지원 범위를 표시 |
-| 정적 분석 | JDK AST를 이용한 SQL 삽입·HTML 출력·SSRF 후보 탐지 |
-| 의존성 CVE | Maven 의존성/인벤토리의 버전과 OSV 공지 대조, 소스·앱 JAR·runtime JAR 해시 연결 |
-| 동적 검사 | 운영자가 등록한 일회용 서버와 허용된 HTTP·상태 조회 시나리오 실행 |
-| AI 안내 | 로컬 Ollama가 확인된 HTTP 근거의 점검 영역을 선택. 안내 문구·절차는 하네스가 표시 |
-| 수정 검증 | 승인한 수정 묶음을 복사본에만 적용·빌드해 같은 조건으로 전후 비교 |
-| 격리 | 선택형 Docker Linux 실행 제한, 소유 루프백 중계, 취소·서버·복사본 정리 |
+| `get_capabilities` | 기본 기능·예제 경로·지원 범위 조회 |
+| `get_product_capabilities` | 제품 버전·설정·실행 코드 해시·재시작 필요 여부 조회 |
+| `list_projects` | 등록된 프로젝트 목록 조회 |
+| `inspect_project` | 프로젝트 구조와 엔드포인트 조사 |
+| `collect_endpoint_evidence` | 엔드포인트 AST 근거 메타데이터 수집 |
+| `scan_project` | 폴더 통합 검사 시작 |
+| `get_project_scan_status` | 통합 검사 진행 상태 조회 |
+| `read_project_scan_report` | 통합 보고서 조회 |
+| `cancel_project_scan` | 통합 검사 취소 및 소유 서버 정리 |
+| `review_endpoint` | 승인된 예산으로 AI 관찰 시작 |
+| `get_review_status` | AI 관찰 상태와 원격 완료 여부 조회 |
+| `cancel_review` | AI 관찰 취소 |
+| `inspect_dependencies` | 의존성 목록 조사 |
+| `scan_dependency_cves` | 의존성 버전과 CVE 공지 대조; 기본은 캐시 조회 |
+| `run_http_security_check` | 등록·허용된 일회용 루프백 환경의 HTTP 검사 |
+| `verify_project_fix` | 복사본에 수정 묶음 적용·빌드·전후 검증 시작 |
+| `get_fix_verification_status` | 복사본 수정 검증 상태 조회 |
+| `cancel_fix_verification` | 수정 검증 취소 및 소유 자원 정리 |
+| `verify_audit_candidates` | 별도 모델·검증 전용 grant로 감사 후보 검증 시작 |
+| `get_audit_verification_status` | 감사 검증 작업 상태 조회 |
+| `cancel_audit_verification` | 감사 검증 작업 취소 |
+| `list_product_reports` | 제품 보고서 목록 조회 |
+| `read_review_report` | 제품·감사·검증 보고서 조회 |
+| `run_sample_security_check` | 고정 Java 예제 검사·선택적 Oracle JDK 영향 버전 대조 |
+| `list_security_reports` | 예제 검사 보고서 목록 조회 |
+| `read_security_report` | 예제 검사 보고서 조회 |
+| `get_synthetic_evaluation_summary` | 완료된 합성 C 평가 요약 조회 |
 
-MCP 도구는 24개, 프롬프트는 4개다. 폴더 통합 진입점은 `scan_project`다. 다른 언어는 미지원으로 표시한다. AI 생성·외부 CVE 조회·서버 실행은 설정과 승인이 있는 단계만 수행하며 나머지는 미실행으로 기록한다.
+감사 검증은 `verify_audit_candidates(report_id, grant_id)`로 시작하면 `job_id`를 반환한다. 해당 ID로 상태를 조회하거나 취소하고, 완료된 보고서는 `read_review_report`로 읽는다. 공개키 서명 검토·신규 검증 예산 승인 CLI와 입력 조건은 [감사 계약](docs/audit-contract.md)을 따른다.
 
-## 준비
+## 채팅용 슬래시 명령
 
-Python 3.12, JDK 17, Gradle wrapper를 사용한다. 최초 Python/Gradle 의존성 설치에는 네트워크가 필요할 수 있다. Docker와 Ollama는 해당 기능을 쓸 때만 필요하다.
+고정 예제 검사와 저장된 결과 조회에 사용하는 스킬 명령이다.
 
-PowerShell에서 **이 저장소 루트로 이동한 다음** 실행한다. `Read-Host`에는 실제 경로를 입력한다. 코드 블록 표시용 백틱은 명령에 포함하지 않는다.
+| 명령 | 기능 |
+| --- | --- |
+| `/localcode-check` | CVE 조회 없이 고정 Java 예제 검사 |
+| `/localcode-cve` | 고정 Java 예제 검사와 Oracle JDK 영향 버전 대조 |
+| `/localcode-reports` | 기존 예제 보고서 목록·상세 조회 |
+| `/localcode-summary` | 완료된 합성 C 4건의 평가 요약 조회 |
+
+## 빌드와 검증
+
+JDK17·Python3.12·requirements-mcp.txt 환경이 필요하다. 설치/네트워크 변경은 작업별로 정한다. 제품 브리지는 과거 동결 JAR와 분리한다.
 
 ```powershell
 $env:JAVA_HOME = Read-Host 'JDK 17 설치 폴더'
-python -m pip install -r requirements-mcp.txt
-.\gradlew.bat --no-daemon prepareProductRuntime
-python -m localcode_review_mcp doctor
+# 기존 제품 라이브러리가 준비된 환경의 오프라인 빌드 및 입력/산출물 해시 영수증
+python scripts/build_product_runtime.py --jdk $env:JAVA_HOME
+python -m unittest discover -s scripts -p 'test_*.py' -v
+python scripts/smoke_mcp_product.py
+# 감사 검증 도구의 시작·상태·오류 거부까지 합성 입력으로 확인; 실제 모델 호출 없음
+python scripts/smoke_mcp_adoption.py
 ```
 
-Gradle 캐시가 준비됐다면 `--offline`을 추가할 수 있다. macOS/Linux는 `sh ./gradlew prepareProductRuntime`을 사용한다. 실제 동적 실행의 주 검증 환경은 Windows이며, 모든 OS 동작을 검증한 것은 아니다.
+새 환경에서 제품 라이브러리 준비는 `gradlew.bat prepareProductRuntime`으로 하고, 해시 연결 영수증은 위 빌더로 생성한다. 원래 installDist와 완료 실험/생성 명령은 재실행하지 않는다. 기존 닫힌 모델 예산을 초기화하지 않는다.
 
-## 폴더 검사
+## 실행 경계
 
-처음에는 모델 호출 없이 조사·정적 검사와 이용 가능한 로컬 기록만 확인할 수 있다. 온라인 CVE와 일회용 서버 설정은 기본 비활성 상태다.
+대상 README의 명령을 자동 실행하지 않는다. 명시된 운영자 프로필만 복사본에서 실행한다. 기본 프로세스 경계는 OS 샌드박스가 아니다. Docker 선택 시 digest 고정 이미지·비관리자·읽기 전용·자원 제한·기본 network none·IPv6 비활성화를 검사한다. 컨테이너 탈출 전체 방어는 미검증이다.
 
-```powershell
-$projectFolder = Read-Host '검사할 Java/Spring 프로젝트 절대 경로'
-python -m localcode_review_mcp configure --project demo --root $projectFolder --jdk $env:JAVA_HOME
-python -m localcode_review_mcp scan $projectFolder --max-ai-endpoints 0 --no-remediation
-```
+실행마다 코드/런타임 해시·PID·UTC 영수증을 저장한다. 실행 중 제품 코드 변경을 감지한 서버는 새 작업을 거부하고 재시작을 요구한다. 재연결 후 `get_product_capabilities`의 `runtime_provenance`에서 코드 해시 일치와 `restart_required=false`를 확인한다. 자동 hot reload는 제공하지 않는다.
 
-결과는 기본 `results/product/scan-…/report.json`과 `report.md`에 저장한다. `PARTIAL`은 지원 범위만 수행했다는 뜻이며, 전체 보안 판정은 `NOT_ASSESSED`다. 모델 응답은 `NOT_REVIEWED`/`REVIEW_REQUIRED` 상태를 유지한다.
+실제 검사 대상 소스·진단 원문·승인·실행 결과는 로컬에 보존하고 공개 커밋에 포함하지 않는다. 이 저장소에는 제품 코드·합성 테스트·사용법을 포함한다. 개발 환경의 과거 실험 기록과 로컬 설정은 게시하지 않는다.
 
-자세한 설정은 [폴더 검사 사용법](docs/folder-scan.md), 검증 명령은 [테스트 안내](docs/testing.md), MCP 연결 예시는 [mcp](mcp/README.md)를 참고한다.
+## Python 지원
 
-게시용 복사본에서 Java 브리지 빌드·Python90회·MCP24도구/4프롬프트를 확인했다. [확인 범위와 한계](docs/verification.md)를 함께 읽는다.
+`scan_project`는 표준 라이브러리 http.server의 리터럴 dispatch 경로와 제한된 SQL/HTML/객체 조회/파일 읽기 후보를 수집한다. 운영자가 지정한 고정 Bandit, PyPI 조회, 일회용 HTTP/브라우저, 대표 의존성 전후 계획을 같은 보고서에 연결할 수 있다. Python 원문은 기존 Java AI 계약으로 보내지 않는다.
 
-## 포함 범위와 한계
-
-이 저장소는 제품 코드, 자체 테스트, 합성 샘플과 사용법을 게시한 것이다. 실제 프로젝트 소스·진단 원문·로컬 설정·설치 파일·과거 승인/예산·실험 결과는 포함하지 않는다. 원본 개발 환경에서 기록한 Python 202회/Java 178개 결과를 이 게시본의 테스트 통과 횟수로 주장하지 않는다.
-
-- 정적 분석은 제한된 메서드 내부 흐름의 **후보** 탐지다. 서비스 간 흐름·반사·비동기의 완전한 해석은 제공하지 않는다.
-- CVE 버전 일치는 악용 가능성이나 배포 서버 빌드 일치의 증거가 아니다.
-- HTTP는 등록한 시나리오만 실행한다. 범용 공격 탐색이나 브라우저 기반 취약점 검사가 아니다.
-- Docker 설정 검사는 모든 네트워크 우회·컨테이너 탈출 방어를 보증하지 않는다. 복사본 빌드는 별도 호스트 실행 경계이며 강한 격리가 필수면 우회하지 않고 거부한다.
-- AI의 근거 선택은 오판정할 수 있다. 원본 자동 수정·배포·안전 승인은 하지 않는다.
-- 큰 입력의 정확한 로컬 토큰 측정은 특정 Windows/Ollama/DLL/모델 및 비공개 과거 보정 자료에 의존한다. 해당 자료는 게시하지 않았으며 측정 불가 시 요청을 차단한다. 입력을 명시적으로 줄여야 하며 암묵 절단하지 않는다.
-- 과거 합성 평가 요약·고정 Java 예제 호환 도구는 별도 자료/예제 경로가 없으면 이용할 수 없다. 폴더 검사와 구분한다.
-
-`tools/spring-*-fixture`는 의도한 결함과 재현용 구버전을 포함한다. 폐기 가능한 로컬 환경에서만 사용하며 운영에 배포하지 않는다. 실제 소스·진단·자격증명은 Git에 추가하지 않는다.
+Bandit과 자체 AST가 같은 결함을 중복 탐지할 수 있다. 실행 완료·등록된 기대 동작 일치를 전체 안전이나 배포 호환성으로 해석하지 않는다. 선택 도구 설치와 프로필은 [Python 안내](docs/python-analysis.md), 게시본에서 확인한 범위는 [검증 기록](docs/verification.md)을 따른다.

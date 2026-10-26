@@ -65,6 +65,12 @@ def verify_resolved_build(root: Path, data: dict, snapshot: Snapshot) -> dict:
 def dependency_inventory(config: ProductConfig, project_id: str) -> dict:
     root, settings = config.project(project_id)
     snapshot = Snapshot.read(root, settings.get("commit"))
+    if not any(p.endswith('.java') for p in snapshot.files):
+        from .python_source import PythonSnapshot
+        python_snapshot = PythonSnapshot.read(root, settings.get('commit'))
+        if any(p.endswith('.py') for p in python_snapshot.files):
+            from .python_dependencies import inventory as python_inventory
+            return python_inventory(config, project_id, python_snapshot)
     packages, unresolved, sources = {}, [], []
 
     def add(name, version, source, basis, scope="UNKNOWN"):
@@ -197,6 +203,8 @@ async def _query_page(client: httpx.AsyncClient, payload: dict) -> dict:
 
 
 async def scan_cves(config: ProductConfig, project_id: str, online: bool = False) -> dict:
+    from .provenance import execution_receipt
+    start_receipt = execution_receipt()
     inventory = await asyncio.to_thread(dependency_inventory, config, project_id)
     if online and not config.allow_osv_network:
         raise ProductError("OSV_NETWORK_DISABLED: enable allow_osv_network in local configuration")
@@ -261,6 +269,8 @@ async def scan_cves(config: ProductConfig, project_id: str, online: bool = False
                 rows.append({"package": package, "status": "INCOMPLETE", "error_code": str(error) if isinstance(error, ProductError) else type(error).__name__, "vulnerabilities": None})
     incomplete = any(row["status"] not in {"CHECKED_ONLINE", "CHECKED_CACHED"} for row in rows) or len(inventory["packages"]) > 100 or bool(inventory["unresolved"])
     report = {"kind": "dependency-cve", "project_id": project_id, "recorded_at": now(), "status": "PARTIAL" if incomplete else "COMPLETED_FOR_LISTED_PACKAGES",
+              "execution_start": {"pid":start_receipt['pid'],'instance_id':start_receipt['instance_id'],
+                                  'started_at':start_receipt['execution_started_at_utc'],'code_sha256':start_receipt['code']['sha256']},
               "inventory": inventory, "packages": rows, "package_limit": 100, "queries_sent": requests_sent,
               "source": OSV_QUERY, "runtime_JDK_CVE": "USE_SEPARATE_RUNTIME_ADVISORY_CHECK", "model_calls": 0,
               "limits": ["Version matches do not establish exploitability.", "SBOM and resolved inventories must match the deployed build."]}

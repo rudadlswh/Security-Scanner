@@ -13,6 +13,8 @@ import tempfile
 import time
 from typing import Any
 import uuid
+from . import provenance
+from .contracts import relative_path, bounded_document
 
 REPO = Path(__file__).resolve().parents[1]
 IDENTIFIER = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}\Z")
@@ -47,7 +49,12 @@ def load_json(path: Path, maximum: int = 4_194_304) -> Any:
         data = stream.read(maximum + 1)
     if len(data) > maximum:
         raise ProductError("JSON_SIZE_LIMIT")
-    return json.loads(data, object_pairs_hook=unique)
+    try:
+        value = json.loads(data, object_pairs_hook=unique)
+    except (RecursionError, UnicodeError):
+        raise ProductError("JSON_VALUE_INVALID") from None
+    bounded_document(value, maximum)
+    return value
 
 
 def replace_local_file(source, destination) -> None:
@@ -80,6 +87,7 @@ def save_json(path: Path, value: Any, *, replace: bool = False) -> None:
 
 
 def inside(root: Path, relative: str) -> Path:
+    relative_path(relative)
     candidate = root / relative
     if Path(relative).is_absolute() or ".." in Path(relative).parts:
         raise ProductError("PATH_ESCAPE")
@@ -106,6 +114,7 @@ class ProductConfig:
     http_targets: dict = field(default_factory=dict)
     allow_osv_network: bool = False
     scan_profiles: dict = field(default_factory=dict)
+    audit_policy: dict = field(default_factory=dict)
 
     @classmethod
     def read(cls, path: Path, jdk: Path | None = None):
@@ -128,8 +137,10 @@ class ProductConfig:
         profiles = data.get("scan_profiles", {})
         if not isinstance(profiles, dict) or any(not IDENTIFIER.fullmatch(k) or not isinstance(v, dict) for k, v in profiles.items()):
             raise ProductError("SCAN_PROFILE_REGISTRY_INVALID")
+        policy = data.get('audit_policy', {})
+        if not isinstance(policy,dict): raise ProductError('AUDIT_POLICY_INVALID')
         return cls(path.resolve(), projects, Path(selected_jdk).resolve() if selected_jdk else None,
-                   result, data.get("model", {}), data.get("http_targets", {}), data.get("allow_osv_network") is True, profiles)
+                   result, data.get("model", {}), data.get("http_targets", {}), data.get("allow_osv_network") is True, profiles, policy)
 
     def project(self, project_id: str) -> tuple[Path, dict]:
         if project_id not in self.projects:
@@ -280,10 +291,14 @@ class ProductStore:
         return inside(self.root, identifier)
 
     def create(self, kind: str, metadata: dict) -> str:
+        receipt = provenance.execution_receipt()
         identifier = kind + "-" + uuid.uuid4().hex
         directory = self.folder(identifier)
         directory.mkdir(parents=True, exist_ok=False)
-        save_json(directory / "metadata.json", {**metadata, "id": identifier, "created_at": now()})
+        save_json(directory / "execution-start.json", receipt)
+        save_json(directory / "metadata.json", {**metadata, "id": identifier, "created_at": now(),
+                  "execution_provenance": {"instance_id": receipt["instance_id"], "pid": receipt["pid"],
+                  "code_sha256": receipt["code"]["sha256"], "receipt_sha256": digest(receipt)}})
         return identifier
 
     def read(self, identifier: str, name: str = "report.json") -> dict:

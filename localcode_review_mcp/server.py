@@ -221,7 +221,7 @@ def create_server(settings: Settings) -> FastMCP:
     """도구 정의·인자 스키마·프로토콜 처리는 공식 SDK에 맡긴다."""
     service = ReviewService(settings)
     server = FastMCP("LocalCode Review", instructions=(
-        "Java/Spring 폴더의 scan_project 통합 검사와 개별 조사·관찰·의존성 CVE·루프백 HTTP 도구입니다. "
+        "Java/Spring 및 Python http.server 지원 구간의 scan_project 통합 검사와 개별 조사·관찰·의존성 CVE·루프백 HTTP 도구입니다. "
         "scan_project는 폴더 경로 하나를 받고 기존 로컬 승인 범위에서 실행하며 미지원/미실행을 통합 보고서에 기록합니다. "
         "HTTP 근거의 점검 영역 선택에 기존 승인1회를 사용하고 설명·수정 절차·CVE 후보는 하네스가 표시합니다. AI 자유문 생성·자동 수정은 없습니다. include_remediation=false로 AI 선택을 생략합니다. "
         "프로젝트 명령은 MCP 인자로 받지 않으며 명시된 scan_profiles의 일회용 복사본 실행만 허용합니다. "

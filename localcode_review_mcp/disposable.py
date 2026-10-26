@@ -175,6 +175,17 @@ class DisposableServer:
         except asyncio.CancelledError:
             await copying
             raise
+        expected=self.spec.get('expected_source_files')
+        if expected is not None:
+            if not isinstance(expected,dict) or not expected or len(expected)>500:
+                raise ProductError('DISPOSABLE_SOURCE_BINDING_INVALID')
+            actual={}
+            for name,wanted in expected.items():
+                copied=inside(self.copy,name)
+                if not isinstance(wanted,str) or not copied.is_file() or digest(copied.read_bytes())!=wanted:
+                    raise ProductError('DISPOSABLE_COPIED_SOURCE_MISMATCH_NO_EXECUTION')
+                actual[name]=wanted
+            self.metadata['executed_source_files']=actual
         replacements = {"{project_copy}": str(self.copy), "{run_dir}": str(self.run_dir), "{port}": str(parsed.port)}
         def expand(value):
             for key, replacement in replacements.items():

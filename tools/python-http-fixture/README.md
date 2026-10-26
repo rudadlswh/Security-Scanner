@@ -1,0 +1,1 @@
+Intentional loopback-only training copy from user-selected security-lab. Synthetic data; never deploy. Used for bounded adapter regression tests. No independent-generalization claim.

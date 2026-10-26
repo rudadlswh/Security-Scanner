@@ -155,6 +155,7 @@ def scope_for(store: ProductStore, collection: dict) -> dict:
 
 
 class ReviewJobs:
+    source_mode = False
     def __init__(self, config: ProductConfig):
         self.config = config
         self.store = ProductStore(config.results)
@@ -168,9 +169,15 @@ class ReviewJobs:
         return status
 
     async def start(self, project_id: str, collection_id: str, policy: str = "NOT_PROVIDED") -> dict:
+        if self.source_mode:
+            _, project = self.config.project(project_id)
+            if project.get('allow_source_proposals') is not True or policy!='NOT_PROVIDED':
+                raise ProductError('SOURCE_PROPOSAL_EXPLICIT_LOCAL_OPT_IN_REQUIRED')
         if policy not in {"owner_only", "owner_or_admin", "authenticated_anyone", "NOT_PROVIDED"}:
             raise ProductError("POLICY_UNSUPPORTED")
         collection = self.store.read(collection_id)
+        if collection.get('raw_source_allowed_for_ai') is False:
+            raise ProductError('PYTHON_RAW_SOURCE_AI_NOT_SUPPORTED')
         if collection.get("project_id") != project_id or collection.get("collection_id") != collection_id:
             raise ProductError("COLLECTION_PROJECT_MISMATCH")
         checksum = collection["collection_sha256"]
@@ -227,6 +234,8 @@ class ReviewJobs:
             model = self.config.model
             if authorization.get("blocked") or authorization["calls_consumed"] >= authorization["calls_cap"]:
                 raise ProductError("MODEL_BUDGET_BLOCKED_OR_EXHAUSTED")
+            if self.source_mode and authorization.get('diagnostic_save') is not True:
+                raise ProductError('SOURCE_PROPOSAL_DIAGNOSTIC_AUTHORIZATION_REQUIRED')
             expiry = dt.datetime.fromisoformat(authorization["expires_at"])
             if expiry.tzinfo is None or dt.datetime.now(dt.timezone.utc) >= expiry:
                 raise ProductError("MODEL_AUTHORIZATION_EXPIRED")
@@ -239,7 +248,11 @@ class ReviewJobs:
             if digest(snapshot.metadata()) != collection["snapshot_sha256"]:
                 raise ProductError("PROJECT_CHANGED_SINCE_COLLECTION")
             delete = collection["endpoint"]["http_method"] == "DELETE"
-            request = prepare_request(snapshot, collection, model)
+            if self.source_mode:
+                from .source_analysis import prepare_source_request
+                request = prepare_source_request(snapshot, collection, model)
+            else:
+                request = prepare_request(snapshot, collection, model)
             schema = request["format"]
             measurement = await asyncio.to_thread(measure_input, request, model)
             save_json(directory / "input-measurement.json", measurement)
@@ -257,6 +270,8 @@ class ReviewJobs:
                 await asyncio.to_thread(snapshot.verify)
                 if dt.datetime.now(dt.timezone.utc) >= expiry:
                     raise ProductError("MODEL_AUTHORIZATION_EXPIRED")
+                from .provenance import execution_receipt
+                execution_receipt()
                 save_json(directory / "request-metadata.json", {"request_sha256": digest(request), "schema_sha256": digest(schema),
                           "source_snapshot_sha256": collection["snapshot_sha256"], **measurement, "access_boundary": boundary})
                 authorization["calls_consumed"] += 1
@@ -290,8 +305,24 @@ class ReviewJobs:
                         raise ProductError("DUPLICATE_MODEL_JSON_KEY")
                     result[key] = value
                 return result
-            raw = validate_observation(json.loads(content, object_pairs_hook=unique), collection["endpoint"]["endpoint_id"], {e["id"] for e in collection["evidence"]}, delete)
+            if self.source_mode:
+                from .source_analysis import validate_generated_proposal
+                raw = validate_generated_proposal(json.loads(content,object_pairs_hook=unique),collection)
+            else:
+                raw = validate_observation(json.loads(content, object_pairs_hook=unique), collection["endpoint"]["endpoint_id"], {e["id"] for e in collection["evidence"]}, delete)
             await asyncio.to_thread(snapshot.verify)
+            if self.source_mode:
+                save_json(directory/'source-proposal.diagnostic.json',raw)
+                report={'kind':'source-proposal-review','report_id':job_id,'collection_id':collection['collection_id'],
+                        'collection_sha256':collection['collection_sha256'],'project_id':collection['project_id'],
+                        'claims':[{'id':c['id'],'evidence_ids':c['evidence_ids'],'text_sha256':digest(c),
+                                   'semantic_status':'NOT_REVIEWED','source_cause_confirmed':False} for c in raw['claims']],
+                        'proposal_sha256':digest(raw),'authors':[*project.get('proposal_authors',['IMPLEMENTING_ASSISTANT']),'MODEL:'+model['name']],
+                        'status':'EVIDENCE_LINKS_VALIDATED_ONLY','automatic_apply':False,'model_calls':1,
+                        'semantic_review_status':'NOT_REVIEWED','diagnostic_saved':True,'recorded_at':now()}
+                save_json(directory/'report.json',report)
+                update(state='COMPLETED',remote_completion='COMPLETED',report_available=True,semantic_review_status='NOT_REVIEWED')
+                return
             if delete:
                 pipeline = await asyncio.to_thread(bridge, self.config, {"operation": "compare", "root": str(root), "policy": policy,
                                                                         "observation": raw, "ledger": scope_for(self.store, collection)})
@@ -324,6 +355,10 @@ class ReviewJobs:
             if lease_owned and (not sent or completed):
                 if lock.exists() and lock.read_text(encoding="utf-8") == job_id:
                     lock.unlink()
+
+
+class SourceReviewJobs(ReviewJobs):
+    source_mode = True
 
 
 def acknowledge_failure(config: ProductConfig, job_id: str, remote_idle_confirmed: bool) -> dict:
