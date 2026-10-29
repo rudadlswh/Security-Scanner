@@ -1,4 +1,6 @@
-# Java/Spring 폴더 검사 사용법
+# 폴더 통합 검사 사용법
+
+이 브랜치는 `product-workflow/7`과 27개 MCP 도구를 기준으로 한다. Java/Spring과 Python 표준 `http.server`의 지원 구간을 다룬다. 별도 개발 작업공간의 `/11` 채팅/API 검토 기능은 이 브랜치에 포함되지 않는다.
 
 MCP `scan_project(project_path)` 또는 CLI `scan`에 프로젝트의 절대 경로를 전달한다. 폴더 조사 → 정적 후보 → 승인된 AI 관찰 → CVE → 등록된 HTTP → 안내 → 선택한 복사본 수정 검증 → JSON/Markdown 보고서 순서다. 설정이 없거나 지원하지 않는 단계는 미실행으로 보고한다.
 
@@ -21,7 +23,7 @@ MCP는 ID를 반환하고 상태 도구로 완료를 조회한다. CLI 통합 �
 
 ## 소스와 AI 관찰
 
-`prepareProductRuntime`으로 JDK AST 브리지를 빌드한다. 대상 빌드나 annotation processor를 자동 실행하지 않는다. 엔드포인트 기본 상한100, AI 상한20이며 누락 수량을 기록한다.
+Java는 `prepareProductRuntime`으로 JDK AST 브리지를 빌드한다. Python은 표준 라이브러리 AST와 선택된 Bandit 도구를 사용한다. 대상 빌드나 annotation processor를 자동 실행하지 않는다. 엔드포인트 기본 상한100, AI 상한20이며 누락 수량을 기록한다.
 
 AI를 쓰려면 루프백 Ollama 주소·설치 모델 이름·전체 digest와 새 로컬 호출 예산이 필요하다. `authorize-model --calls N --minutes N`은 실제 생성을 허용하는 운영자 명령이다. 검증되지 않은 외부 주소나 열린 수신 환경은 전송을 차단한다. 기본 원문 로그는 OFF이며 진단 저장은 명시적으로 허용해야 한다.
 
@@ -65,4 +67,4 @@ CVE 공지는 패키지 안에서 ID/별칭이 겹치면 묶는다. 패키지별
 
 ## Python /7
 
-표준 http.server 리터럴 dispatch 지원 구간과 선택 도구를 추가했다. [Python 설정과 제한](python-analysis.md)을 따른다. 프레임워크 전체 지원·원문 AI 전송·배포 호환성 보증은 제공하지 않는다.
+표준 http.server 리터럴 dispatch 지원 구간과 선택 도구를 추가했다. [Python 설정과 제한](python-analysis.md)을 따른다. SQL·XSS·IDOR·경로 탐색은 후보이며 미지원·미실행은 안전으로 판정하지 않는다. Flask/FastAPI 지원, Python 원문 AI 전송, 배포 호환성 보증은 제공하지 않는다.

@@ -1,6 +1,8 @@
-"""기능: Java AST 입력-위험 호출 후보를 수집하고 근거 위치·조건부 수정 절차를 보고한다.
+"""기능: Java AST 입력-위험 호출 후보와 지원되는 Python 정적 후보를 수집해 보고한다.
 
-연결: 폴더 통합 검사 → 읽기 전용 Snapshot/bridge → 후보와 미지원 범위. 모델은 호출하지 않는다.
+연결: 폴더 통합 검사 → 언어별 스냅샷·분석기 → 후보와 미지원 범위. 모델은 호출하지 않는다.
+Java는 선언 기반 연결의 제한된 후보이며 Python은 python_tools 분석기로 위임한다.
+검사 완료나 후보 부재는 안전 또는 실행 경로 전체의 증명이 아니다.
 """
 from .collector import bridge
 from .workspace import ProductStore, Snapshot, digest, save_json
